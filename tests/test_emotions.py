@@ -36,28 +36,28 @@ def test_confidence_gating(clean_engine):
 
 
 def test_negative_streak_scaling(clean_engine):
-    # 1st negative interaction: dampened response (raw_trust clamped to -2)
+    # 1st RUDE interaction: dampened response (raw_trust clamped to -2)
     clean_engine.apply_appraisal({
-        "category": "ROAST",
+        "category": "RUDE",
         "confidence": 1.0,
         "delta_trust": -5,
         "delta_irritation": 15,
-        "intent": "Тестовый подкол",
+        "intent": "Первая грубость",
     })
     assert clean_engine.negative_streak == 1
     assert clean_engine.trust == 23  # 25 - 2
     assert clean_engine.irritation == 8  # Clamped to 8 on first strike
 
-    # 2nd negative interaction: slightly firmer response
+    # 2nd RUDE interaction: firmer response
     clean_engine.apply_appraisal({
-        "category": "ROAST",
+        "category": "RUDE",
         "confidence": 1.0,
         "delta_trust": -5,
         "delta_irritation": 15,
-        "intent": "Второй подкол",
+        "intent": "Вторая грубость",
     })
     assert clean_engine.negative_streak == 2
-    assert clean_engine.trust == 20  # ROAST is clamped to -3 max: 23 - 3 = 20
+    assert clean_engine.trust == 19  # 23 - 4
     assert clean_engine.irritation == 22  # 8 + 14
 
     # Friendly interaction resets streak

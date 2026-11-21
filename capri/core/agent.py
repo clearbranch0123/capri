@@ -44,10 +44,75 @@ def _format_appraisal_thought(appraisal_data: dict) -> str:
     return summary
 
 
+def _extract_first_json_object_with_span(text: str) -> tuple[Optional[dict], int, int]:
+    """Safely extract the first valid JSON object (supporting nested arrays/objects) and its span."""
+    if not text:
+        return None, -1, -1
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        idx = text.find("{", pos)
+        if idx < 0:
+            return None, -1, -1
+        try:
+            obj, end_idx = decoder.raw_decode(text, idx)
+            if isinstance(obj, dict):
+                return obj, idx, end_idx
+        except Exception:
+            pass
+        pos = idx + 1
+
+
+def _extract_first_json_object(text: str) -> Optional[dict]:
+    obj, _, _ = _extract_first_json_object_with_span(text)
+    return obj
+
+
+def _extract_first_json_value(text: str):
+    """Safely extract the first valid JSON object or array from text."""
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(text):
+        idx_obj = text.find("{", pos)
+        idx_arr = text.find("[", pos)
+        starts = [i for i in (idx_obj, idx_arr) if i >= 0]
+        if not starts:
+            return None
+        idx = min(starts)
+        try:
+            val, _ = decoder.raw_decode(text, idx)
+            if isinstance(val, (dict, list)):
+                return val
+        except Exception:
+            pass
+        pos = idx + 1
+    return None
+
+
+def extract_memory_candidates_from_appraisal(appraisal: Optional[dict]) -> list[dict]:
+    """
+    Pop and validate raw `memory_candidates` from an appraisal dict BEFORE
+    passing the emotional appraisal to EmotionEngine.apply_appraisal().
+    Never writes to MemoryStore directly.
+    """
+    if not isinstance(appraisal, dict):
+        return []
+    raw = appraisal.pop("memory_candidates", None)
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
 def parse_and_strip_appraisal(raw_text: str) -> tuple[dict, str]:
     """
-    Извлекает структурированный объект appraisal из ответа модели
-    и БЕЗУСЛОВНО вычищает все мысли, теги и JSON из текста ответа.
+    Извлекает структурированный объект appraisal (и опциональные memory_candidates)
+    из ответа модели и БЕЗУСЛОВНО вычищает все мысли, теги и JSON из текста ответа.
     """
     clean_text = raw_text
     appraisal: dict = {}
@@ -56,6 +121,31 @@ def parse_and_strip_appraisal(raw_text: str) -> tuple[dict, str]:
     clean_text = re.sub(r"<think\b[^>]*>[\s\S]*?</think>", "", clean_text, flags=re.IGNORECASE)
     clean_text = re.sub(r"<thought\b[^>]*>[\s\S]*?</thought>", "", clean_text, flags=re.IGNORECASE)
 
+    # 1b. Извлечение и удаление отдельного тега <memory_candidates>...</memory_candidates> (если модель вынесла его наружу)
+    standalone_candidates: list[dict] = []
+    for m_mc in re.finditer(r"<memory_candidates\b[^>]*>([\s\S]*?)</memory_candidates>", clean_text, flags=re.IGNORECASE):
+        mc_body = re.sub(r"^```(?:json)?\s*|\s*```$", "", m_mc.group(1).strip(), flags=re.IGNORECASE).strip()
+        mc_val = _extract_first_json_value(mc_body)
+        if isinstance(mc_val, list):
+            standalone_candidates.extend(item for item in mc_val if isinstance(item, dict))
+        elif isinstance(mc_val, dict):
+            nested = mc_val.get("memory_candidates")
+            if isinstance(nested, list):
+                standalone_candidates.extend(item for item in nested if isinstance(item, dict))
+            else:
+                standalone_candidates.append(mc_val)
+    clean_text = re.sub(r"<memory_candidates\b[^>]*>[\s\S]*?</memory_candidates>", "", clean_text, flags=re.IGNORECASE)
+    m_mc_unclosed = re.search(r"<memory_candidates\b[^>]*>([\s\S]*)", clean_text, flags=re.IGNORECASE)
+    if m_mc_unclosed:
+        mc_tail = m_mc_unclosed.group(1)
+        mc_val = _extract_first_json_value(mc_tail)
+        if isinstance(mc_val, list):
+            standalone_candidates.extend(item for item in mc_val if isinstance(item, dict))
+        elif isinstance(mc_val, dict):
+            standalone_candidates.append(mc_val)
+        clean_text = clean_text[: m_mc_unclosed.start()].strip()
+    clean_text = re.sub(r"</?memory_candidates[^>]*>", "", clean_text, flags=re.IGNORECASE)
+
     # 2. Поиск закрытого <appraisal...>...</appraisal>
     m_full = re.search(r"<appraisal\b([^>]*)>([\s\S]*?)</appraisal>", clean_text, re.IGNORECASE)
     if m_full:
@@ -63,24 +153,16 @@ def parse_and_strip_appraisal(raw_text: str) -> tuple[dict, str]:
         body = m_full.group(2).strip()
         clean_text = re.sub(r"<appraisal\b[^>]*>[\s\S]*?</appraisal>", "", clean_text, flags=re.IGNORECASE).strip()
 
-        # Попытка распарсить JSON в теле appraisal
+        # Попытка распарсить JSON в теле appraisal (включая вложенный memory_candidates)
         body_clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", body, flags=re.IGNORECASE).strip()
-        try:
-            parsed = json.loads(body_clean)
-            if isinstance(parsed, dict):
-                appraisal.update(parsed)
-        except Exception:
-            m_json = re.search(r"\{[\s\S]*?\}", body)
-            if m_json:
-                try:
-                    appraisal.update(json.loads(m_json.group(0)))
-                except Exception:
-                    pass
-            if not appraisal:
-                for line in body.splitlines():
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        appraisal[k.strip().lower()] = v.strip().strip("\"'").rstrip(",")
+        parsed = _extract_first_json_object(body_clean)
+        if parsed is not None:
+            appraisal.update(parsed)
+        else:
+            for line in body.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    appraisal[k.strip().lower()] = v.strip().strip("\"'").rstrip(",")
 
         if attrs:
             attr_pairs = re.findall(r'(\w+)=["\']([^"\']*)["\']', attrs)
@@ -100,30 +182,37 @@ def parse_and_strip_appraisal(raw_text: str) -> tuple[dict, str]:
             m_unclosed = re.search(r"<appraisal\b[^>]*>([\s\S]*)", clean_text, re.IGNORECASE)
             if m_unclosed:
                 content = m_unclosed.group(1)
-                m_json = re.search(r"\{[\s\S]*?\}", content)
-                if m_json:
-                    try:
-                        appraisal.update(json.loads(m_json.group(0)))
-                    except Exception:
-                        pass
-                clean_text = re.sub(
-                    r"<appraisal\b[\s\S]*?(?:</appraisal>|\}\s*\n|\n\n(?=[А-ЯA-Z«0-9])|$)",
-                    "",
-                    clean_text,
-                    flags=re.IGNORECASE,
-                ).strip()
+                parsed_obj, _start_i, end_i = _extract_first_json_object_with_span(content)
+                if parsed_obj is not None:
+                    appraisal.update(parsed_obj)
+                    prefix = clean_text[: m_unclosed.start()]
+                    suffix = content[end_i:]
+                    clean_text = (prefix + suffix).strip()
+                else:
+                    clean_text = re.sub(
+                        r"<appraisal\b[\s\S]*?(?:</appraisal>|\}\s*\n|\n\n(?=[А-ЯA-Z«0-9])|$)",
+                        "",
+                        clean_text,
+                        flags=re.IGNORECASE,
+                    ).strip()
 
-    # 4. Проверка отдельного блока кода ```json {"category": ...} ```
-    m_code = re.search(r"```(?:json)?\s*(\{\s*\"category\"[\s\S]*?\})\s*```", clean_text, re.IGNORECASE)
-    if m_code:
-        try:
-            appraisal.update(json.loads(m_code.group(1)))
-        except Exception:
-            pass
-        clean_text = re.sub(r"```(?:json)?\s*\{\s*\"category\"[\s\S]*?\}\s*```", "", clean_text, flags=re.IGNORECASE).strip()
+    # 4. Проверка отдельного блока кода ```json {"category": ...} ``` (с поддержкой вложенных объектов)
+    for m_fence in list(re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", clean_text, flags=re.IGNORECASE)):
+        fence_obj = _extract_first_json_object(m_fence.group(1))
+        if isinstance(fence_obj, dict) and "category" in fence_obj:
+            appraisal.update(fence_obj)
+            clean_text = (clean_text[: m_fence.start()] + clean_text[m_fence.end() :]).strip()
+            break
 
     # 5. Окончательная очистка любых оставшихся тегов appraisal
     clean_text = re.sub(r"</?appraisal[^>]*>", "", clean_text, flags=re.IGNORECASE).strip()
+
+    if standalone_candidates:
+        existing_mc = appraisal.get("memory_candidates")
+        if isinstance(existing_mc, list):
+            appraisal["memory_candidates"] = existing_mc + standalone_candidates
+        else:
+            appraisal["memory_candidates"] = standalone_candidates
 
     # 6. Обработка краткой формы appraisal в квадратных скобках:
     # например: [ROAST | conf: 90%] intent → strategy
@@ -206,7 +295,7 @@ def extract_streamable_visible_text(raw_so_far: str) -> Optional[str]:
 
     low = stripped.lower()
     # Hold back while an internal XML block at the start (or anywhere open) has not closed yet
-    for tag in ("appraisal", "think", "thought"):
+    for tag in ("appraisal", "think", "thought", "memory_candidates"):
         open_pat = f"<{tag}"
         close_pat = f"</{tag}>"
         if open_pat in low:
@@ -215,8 +304,8 @@ def extract_streamable_visible_text(raw_so_far: str) -> Optional[str]:
             if last_close < last_open:
                 return None
 
-    # Hold back partial opening `<` tag prefix like "<ap" or "<thi"
-    if stripped.startswith("<") and ">" not in stripped and len(stripped) < 20:
+    # Hold back partial opening `<` tag prefix like "<ap", "<thi", or "<memory_candidates"
+    if stripped.startswith("<") and ">" not in stripped and len(stripped) < 24:
         return None
 
     # Hold back partial bracket appraisal header like "[ROAST | conf: 90%] ..." until newline
@@ -283,7 +372,7 @@ class CapriAgent:
                     last_t = recent[0]
                     u_preview = last_t.user_text.strip().replace("\n", " ")[:60]
                     a_preview = last_t.assistant_text.strip().replace("\n", " ")[:70]
-                    u_name = getattr(self.config.companion, "user_name", "D") or "D"
+                    u_name = self._user_name()
                     summary_text = f"{u_name}: «{u_preview}» → Капри: «{a_preview}»"
                     self.context_store.set_session_summary(summary_text)
             except Exception as ex:
@@ -328,11 +417,19 @@ class CapriAgent:
         if hasattr(self, "tts") and self.tts:
             self.tts.stop_sync()
 
+    def _user_name(self) -> str:
+        return (getattr(getattr(self.config, "companion", None), "user_name", "") or "").strip() or "User"
+
     def _build_full_prompt(self, user_query: str = "") -> str:
-        memory_block = self.memory_store.get_prompt_context() if hasattr(self, "memory_store") else get_memory_summary_prompt()
-        emotion_block = self.emotions.get_prompt_context()
-        context_block = self.context_store.get_prompt_context() if hasattr(self, "context_store") else ""
-        initiative_block = self.initiative_engine.get_prompt_context() if hasattr(self, "initiative_engine") else ""
+        u_name = self._user_name()
+        memory_block = (
+            self.memory_store.get_prompt_context(user_name=u_name)
+            if hasattr(self, "memory_store")
+            else get_memory_summary_prompt()
+        )
+        emotion_block = self.emotions.get_prompt_context(user_name=u_name)
+        context_block = self.context_store.get_prompt_context(user_name=u_name) if hasattr(self, "context_store") else ""
+        initiative_block = self.initiative_engine.get_prompt_context(user_name=u_name) if hasattr(self, "initiative_engine") else ""
 
         # Rolling compressed summary of older turns in long sessions
         session_summary_block = ""
@@ -420,7 +517,7 @@ class CapriAgent:
                                 )
                                 item["reasoning_content"] = f"Запуск системных инструментов: {tool_names}."
                             else:
-                                item["reasoning_content"] = "Анализ контекста диалога и формулирование ответа D."
+                                item["reasoning_content"] = "Анализ контекста диалога и формулирование ответа пользователю."
                 else:
                     item.pop("reasoning_content", None)
             sanitized.append(item)
@@ -523,6 +620,7 @@ class CapriAgent:
 
         final_response_text = ""
         appraisal_applied_via_tool = False
+        empty_retry_used = False
         stream_tts_session = None
 
         while iteration < max_tool_iterations:
@@ -542,11 +640,30 @@ class CapriAgent:
                     pass_tools = tools_schema
 
                 prepared_messages = self._prepare_messages_for_llm(self.history, provider)
+                if empty_retry_used:
+                    retry_directive = (
+                        "\n\n[ВОССТАНОВЛЕНИЕ ОТВЕТА]: Предыдущий шаг завершился без видимого текста после "
+                        "внутреннего рассуждения. Сразу выведи лаконичный и законченный видимый ответ Капри "
+                        "на последний запрос пользователя."
+                    )
+                    if prepared_messages and prepared_messages[0].get("role") == "system":
+                        first_sys = dict(prepared_messages[0])
+                        first_sys["content"] = f"{first_sys.get('content', '')}{retry_directive}"
+                        prepared_messages = [first_sys] + prepared_messages[1:]
+                    else:
+                        prepared_messages = [{"role": "system", "content": retry_directive.strip()}] + prepared_messages
+
+                effective_max_tokens = int(getattr(self.config.llm, "max_tokens", 2048) or 2048)
+                # Reasoning/thinking models (DeepSeek Flash/Reasoner, Gemini 2.5 Flash) share max_tokens
+                # between hidden reasoning and visible output — enforce a safe floor so answers don't truncate empty.
+                if provider in ("deepseek", "gemini"):
+                    effective_max_tokens = max(effective_max_tokens, 4096)
+
                 request_kwargs = {
                     "model": self.config.llm.model,
                     "messages": prepared_messages,
                     "temperature": getattr(self.config.llm, "temperature", 0.75),
-                    "max_tokens": self.config.llm.max_tokens,
+                    "max_tokens": effective_max_tokens,
                 }
                 # SambaNova, Gemini и DeepSeek не используют presence_penalty / frequency_penalty в OpenAI формате
                 if provider not in ("sambanova", "gemini", "deepseek"):
@@ -738,12 +855,22 @@ class CapriAgent:
                         if (
                             fn_name.lower() == "appraisal"
                             and isinstance(parsed_arg, dict)
-                            and any(k in parsed_arg for k in ("category", "mood", "intent", "strategy"))
+                            and any(k in parsed_arg for k in ("category", "mood", "intent", "strategy", "memory_candidates"))
                         ):
-                            self.emotions.apply_appraisal(parsed_arg, user_message)
-                            appraisal_applied_via_tool = True
-                            turn_thought = _format_appraisal_thought(parsed_arg)
-                            yield AgentEvent("thought", turn_thought, parsed_arg)
+                            raw_candidates = extract_memory_candidates_from_appraisal(parsed_arg)
+                            if any(k in parsed_arg for k in ("category", "mood", "intent", "strategy")):
+                                self.emotions.apply_appraisal(parsed_arg, user_message, user_name=self._user_name())
+                                appraisal_applied_via_tool = True
+                                turn_thought = _format_appraisal_thought(parsed_arg)
+                                yield AgentEvent("thought", turn_thought, parsed_arg)
+                            if raw_candidates and hasattr(self, "memory_store") and self.memory_store:
+                                proposed = self.memory_store.propose_candidates(raw_candidates, user_text=user_message)
+                                if proposed:
+                                    yield AgentEvent(
+                                        "memory_candidates",
+                                        f"Предложено фактов памяти: {len(proposed)}",
+                                        {"candidates": [c.to_dict() for c in proposed]},
+                                    )
                         self.history.append(
                             {
                                 "role": "tool",
@@ -794,11 +921,27 @@ class CapriAgent:
             # Standard text response
             raw_text = raw_content
 
-            # Извлечение и применение когнитивной оценки <appraisal>
+            # Извлечение и применение когнитивной оценки <appraisal> + отдельный разбор memory_candidates
             appraisal_data, clean_text = parse_and_strip_appraisal(raw_text)
+            raw_candidates = extract_memory_candidates_from_appraisal(appraisal_data)
+
+            # Если thinking-модель исчерпала бюджет в reasoning_content или вернула только <appraisal>
+            # без видимого текста — делаем один тихий повтор, не сохраняя пустой шаг в историю.
+            if (
+                not clean_text.strip()
+                and not empty_retry_used
+                and not self._abort_requested
+                and iteration < max_tool_iterations
+            ):
+                empty_retry_used = True
+                if stream_tts_session is not None:
+                    stream_tts_session.cancel()
+                    stream_tts_session = None
+                logger.info("Empty visible text from %s (reasoning=%d chars); retrying once", provider, len(reasoning_content))
+                continue
 
             if appraisal_data:
-                self.emotions.apply_appraisal(appraisal_data, user_message)
+                self.emotions.apply_appraisal(appraisal_data, user_message, user_name=self._user_name())
                 turn_thought = _format_appraisal_thought(appraisal_data)
                 yield AgentEvent("thought", turn_thought, appraisal_data)
             elif appraisal_applied_via_tool:
@@ -811,6 +954,15 @@ class CapriAgent:
                 self.emotions.process_interaction_fallback(user_message)
             else:
                 self.emotions.process_interaction_fallback(user_message)
+
+            if raw_candidates and hasattr(self, "memory_store") and self.memory_store:
+                proposed = self.memory_store.propose_candidates(raw_candidates, user_text=user_message)
+                if proposed:
+                    yield AgentEvent(
+                        "memory_candidates",
+                        f"Предложено фактов памяти: {len(proposed)}",
+                        {"candidates": [c.to_dict() for c in proposed]},
+                    )
 
             final_response_text = clean_text
             assistant_msg = {"role": "assistant", "content": clean_text}

@@ -48,7 +48,7 @@ async def analyze_image_file(
         or os.getenv("GEMINI_API_KEY", "")
         or getattr(cfg.voice, "gemini_api_key", "")
     ).strip()
-    user_name = getattr(getattr(cfg, "companion", None), "user_name", "D") or "D"
+    user_name = getattr(getattr(cfg, "companion", None), "user_name", "User") or "User"
 
     try:
         prev_limit = Image.MAX_IMAGE_PIXELS

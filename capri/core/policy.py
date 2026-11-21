@@ -63,9 +63,6 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset({
 
 # Capri-internal companion state (scoped to ~/.config/capri/*, timers, notifications, avatar UI)
 COMPANION_STATE_TOOLS: frozenset[str] = frozenset({
-    "remember",
-    "update_memory_entry",
-    "forget_memory",
     "add_work_item",
     "resolve_work_item",
     "propose_action",
@@ -77,6 +74,13 @@ COMPANION_STATE_TOOLS: frozenset[str] = frozenset({
     "capri_self_control",
     "capri_browser_clear",
     "take_screenshot",
+})
+
+# User-controlled long-term memory mutations: NEVER silently auto-allowed by LLM tool calls
+MEMORY_MUTATING_TOOLS: frozenset[str] = frozenset({
+    "remember",
+    "update_memory_entry",
+    "forget_memory",
 })
 
 # OS-mutating desktop tools
@@ -574,6 +578,21 @@ class ToolPolicyEngine:
 
         if tool_name in READ_ONLY_TOOLS:
             return PolicyDecision("allow", "read_only", "Инструмент только для чтения.", summary)
+
+        if tool_name in MEMORY_MUTATING_TOOLS:
+            if self.mode == "safe":
+                return PolicyDecision(
+                    "deny",
+                    "memory",
+                    f"Режим SAFE строго read-only: изменение памяти '{tool_name}' запрещено.",
+                    summary,
+                )
+            return PolicyDecision(
+                "ask",
+                "memory",
+                f"Изменение долговременной памяти ('{tool_name}') требует явного подтверждения пользователя.",
+                summary,
+            )
 
         if tool_name in COMPANION_STATE_TOOLS:
             if self.mode == "safe":

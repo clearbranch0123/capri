@@ -361,7 +361,7 @@ class WakeWordListener:
         try:
             # 1. Сигнал активации и реакция
             play_wake_sound()
-            notify_avatar("listening", "● Слушаю тебя, D...")
+            notify_avatar("listening", "● Слушаю тебя...")
 
             if self.on_wake:
                 try:

@@ -522,9 +522,12 @@ async def capri_self_control(action: str, value: str = "") -> str:
 
     # 5. Текущее эмоциональное состояние и статус
     if action_clean in ("mood", "настроение", "эмоции", "status", "статус"):
+        from ..core.config import load_config
         from ..core.emotions import EmotionEngine
+        cfg = load_config()
+        u_name = (getattr(getattr(cfg, "companion", None), "user_name", "") or "").strip() or "User"
         eng = EmotionEngine()
-        return f"Текущее состояние Капри: Настроение={eng.mood}, Доверие к D={eng.trust}/100, Раздражение={eng.irritation}%."
+        return f"Текущее состояние Капри: Настроение={eng.mood}, Доверие к {u_name}={eng.trust}/100, Раздражение={eng.irritation}%."
 
     # 6. Пространственное присутствие (Capri Spatial Presence)
     if action_clean in ("come", "ко мне", "подойди", "иди сюда", "сюда", "stay", "стой", "стой тут", "follow", "следуй", "home", "на базу", "домой", "в угол"):

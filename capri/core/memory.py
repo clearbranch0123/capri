@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -16,6 +17,87 @@ from .config import USER_CONFIG_DIR
 logger = logging.getLogger(__name__)
 
 MEMORY_FILE = USER_CONFIG_DIR / "memory.json"
+DEFAULT_EPHEMERAL_TTL_SECONDS = 72 * 3600  # 3 days for temporary/ephemeral facts
+MAX_CANDIDATES_PER_TURN = 3
+MAX_PENDING_CANDIDATES = 20
+
+RETENTION_MODES = ("long_term", "ephemeral")
+
+# Strict secret/credential detection patterns for proposed memory candidates
+_MEMORY_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Known API key prefixes & tokens
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bgsk_[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{12,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_\-]{12,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    re.compile(r"\bhf_[A-Za-z0-9]{12,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{10,}", re.IGNORECASE),
+    # Private keys, PEM headers, URL credentials & 16-digit payment cards
+    re.compile(r"BEGIN\s+(?:RSA|DSA|EC|OPENSSH|PGP)?\s*PRIVATE\s+KEY", re.IGNORECASE),
+    re.compile(r"https?://[^/\s:@\"'<>]+:[^/\s@\"'<>]+@", re.IGNORECASE),
+    re.compile(r"[?&](?:api[_-]?key|key|token|access[_-]?token|secret|auth|password|passwd|sig)=[^&\s\"'#<>]+", re.IGNORECASE),
+    re.compile(r"\b(?:\d{4}[-\s]){3}\d{4}\b"),
+    # Explicit password/secret/pin/seed/token terminology (RU + EN)
+    re.compile(
+        r"(?:^|[\s\"'«(\[{,;:])("
+        r"password|passwd|passphrase|api[_\s-]?key|secret[_\s-]?key|client[_\s-]?secret|"
+        r"access[_\s-]?token|refresh[_\s-]?token|auth[_\s-]?token|bot[_\s-]?token|api[_\s-]?token|"
+        r"private[_\s-]?key|ssh[_\s-]?key|seed[_\s-]?phrase|recovery[_\s-]?code|pin[_\s-]?code|cvv|cvc|"
+        r"парол(?:ь|я|ю|ем|е|и|ей|ям|ями|ях)|апи[\s-]?ключ\w*|api[\s-]?ключ\w*|"
+        r"секретн(?:ый|ого|ая|ую|ом|ые)\s+(?:ключ|код|токен)\w*|"
+        r"приватн(?:ый|ого|ая|ую|ом|ые)\s+ключ\w*|ssh[\s-]?ключ\w*|ключ\s+доступа|"
+        r"токен\s+(?:доступа|от|для|авторизации|api|github|telegram|бота)|"
+        r"пин[\s-]?код\w*|сид[\s-]?фраз\w*|кодов(?:ое|ого)\s+слово"
+        r")(?:$|[\s\"'»)\]},;:=\-])",
+        re.IGNORECASE | re.UNICODE,
+    ),
+    # Key=value secret assignments (including short pin=1234 or token: xyz)
+    re.compile(
+        r"(?:^|[\s,;])(?:[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|PIN|PASS|CREDENTIAL)[A-Z0-9_]*|парол[ья]|токен|пин)\s*[:=]\s*\S+",
+        re.IGNORECASE | re.UNICODE,
+    ),
+)
+
+
+def contains_secret_or_sensitive_memory(text: str) -> bool:
+    """Return True if text appears to contain API keys, passwords, tokens, or credentials."""
+    if not text:
+        return False
+    for pat in _MEMORY_SECRET_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
+
+
+def memory_payload_contains_secret(
+    key: str,
+    fact: str,
+    *,
+    source_quote: str = "",
+    tags: Optional[List[str]] = None,
+) -> bool:
+    """Check key, fact, key=fact pair, optional source_quote, and tags for secrets/credentials."""
+    raw_k = str(key or "").strip()
+    raw_f = str(fact or "").strip()
+    raw_q = str(source_quote or "").strip()
+    norm_k = _normalize_memory_key(raw_k)
+    candidates = [raw_k, raw_f, raw_q, f"{raw_k}={raw_f}", norm_k, f"{norm_k}={raw_f}"]
+    if tags:
+        candidates.extend(str(t or "").strip() for t in tags)
+    return any(contains_secret_or_sensitive_memory(part) for part in candidates if part)
+
+
+def _normalize_memory_key(raw: str) -> str:
+    """Normalize a memory key to safe lowercase identifier form."""
+    clean = re.sub(r"\s+", "_", (raw or "").strip().lower())
+    clean = re.sub(r"[^\w\-]+", "", clean, flags=re.UNICODE)
+    return clean.strip("_-")[:64]
 
 _RU_SUFFIXES = (
     "остями", "ами", "ями", "ого", "его", "ому", "ему", "ыми", "ими",
@@ -60,7 +142,7 @@ CATEGORIES = (
 
 CATEGORY_LABELS = {
     "general": "Общее",
-    "identity": "Личность D",
+    "identity": "Личность пользователя",
     "preferences": "Предпочтения",
     "environment": "Окружение / Софт",
     "projects": "Проекты",
@@ -70,7 +152,7 @@ CATEGORY_LABELS = {
 
 @dataclass
 class MemoryEntry:
-    """Структурированная запись долговременной памяти о D."""
+    """Структурированная запись долговременной или временной памяти о пользователе."""
     key: str
     fact: str
     category: str = "general"
@@ -81,7 +163,15 @@ class MemoryEntry:
     access_count: int = 0
     last_accessed: float = 0.0
     tags: List[str] = field(default_factory=list)
-    source: str = "user"         # "user", "agent", "workbench"
+    source: str = "user"         # "user", "agent", "workbench", "approved_candidate"
+    retention: str = "long_term" # "long_term" | "ephemeral"
+    expires_at: Optional[float] = None
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        if self.expires_at is None:
+            return False
+        ref = time.time() if now is None else float(now)
+        return ref >= float(self.expires_at)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,6 +213,11 @@ class MemoryEntry:
             if not isinstance(raw_tags, list):
                 raw_tags = []
 
+            raw_ret = str(data.get("retention", "long_term")).lower().strip()
+            retention = raw_ret if raw_ret in RETENTION_MODES else "long_term"
+            raw_exp = data.get("expires_at")
+            expires_at = float(raw_exp) if isinstance(raw_exp, (int, float)) else None
+
             return cls(
                 key=clean_key,
                 fact=str(data.get("fact", "")).strip(),
@@ -135,24 +230,160 @@ class MemoryEntry:
                 last_accessed=float(data.get("last_accessed", 0.0)),
                 tags=[str(t).lower().strip() for t in raw_tags if str(t).strip()],
                 source=str(data.get("source", "user")),
+                retention=retention,
+                expires_at=expires_at,
             )
 
         return cls(key=clean_key, fact=str(data).strip())
 
 
+@dataclass
+class MemoryCandidate:
+    """Кандидат памяти, предложенный моделью и ожидающий явного подтверждения пользователя."""
+    id: str
+    key: str
+    fact: str
+    category: str = "general"
+    retention: str = "long_term"  # "long_term" | "ephemeral"
+    importance: int = 3
+    source_quote: str = ""
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["MemoryCandidate"]:
+        if not isinstance(data, dict):
+            return None
+        key = _normalize_memory_key(str(data.get("key", "")))
+        fact = re.sub(r"\s+", " ", str(data.get("fact", ""))).strip()[:240]
+        if not key or not fact:
+            return None
+        raw_cat = str(data.get("category", "general")).lower().strip()
+        cat = raw_cat if raw_cat in CATEGORIES else "general"
+        raw_ret = str(data.get("retention", "long_term")).lower().strip()
+        retention = raw_ret if raw_ret in RETENTION_MODES else "long_term"
+        try:
+            imp = max(1, min(5, int(data.get("importance", 3))))
+        except Exception:
+            imp = 3
+        quote = re.sub(r"\s+", " ", str(data.get("source_quote", ""))).strip()[:180]
+        cand_id = str(data.get("id", "")).strip()[:16] or uuid.uuid4().hex[:8]
+        try:
+            created = float(data.get("created_at", time.time()))
+        except Exception:
+            created = time.time()
+        return cls(
+            id=cand_id,
+            key=key,
+            fact=fact,
+            category=cat,
+            retention=retention,
+            importance=imp,
+            source_quote=quote,
+            created_at=created,
+        )
+
+
+def validate_memory_candidates(
+    raw_candidates: Any,
+    *,
+    user_text: str = "",
+    existing_entries: Optional[Dict[str, MemoryEntry]] = None,
+    existing_pending: Optional[List[MemoryCandidate]] = None,
+    max_items: int = MAX_CANDIDATES_PER_TURN,
+) -> List[MemoryCandidate]:
+    """
+    Строго валидирует и фильтрует предложенных моделью кандидатов памяти.
+    - Отбрасывает любые ключи/пароли/токены/секреты (в key, fact, source_quote или паре key=fact).
+    - Дедуплицирует относительно уже сохранённой памяти и текущей очереди pending.
+    - Ограничивает число кандидатов за один раунд (по умолчанию до 3).
+    """
+    if isinstance(raw_candidates, dict):
+        items = [raw_candidates]
+    elif isinstance(raw_candidates, list):
+        items = raw_candidates
+    else:
+        return []
+
+    # Never propose ANY memory candidates extracted from a turn that contains secrets/credentials
+    # (prevents models from paraphrasing a password/PIN into an innocent-looking key/fact).
+    if user_text and contains_secret_or_sensitive_memory(user_text):
+        logger.info("Skipping proposed memory candidates from turn containing secrets/credentials")
+        return []
+
+    entries_map = existing_entries or {}
+    pending_keys = {c.key for c in (existing_pending or [])}
+    seen_keys: set[str] = set()
+    validated: List[MemoryCandidate] = []
+
+    for item in items:
+        if len(validated) >= max_items:
+            break
+        if not isinstance(item, dict):
+            continue
+
+        raw_key = str(item.get("key", "")).strip()
+        raw_fact = str(item.get("fact", "")).strip()
+        raw_quote = str(item.get("source_quote", "")).strip()
+
+        # Hard secret/credential filter BEFORE normalization & queueing
+        if (
+            contains_secret_or_sensitive_memory(raw_key)
+            or contains_secret_or_sensitive_memory(raw_fact)
+            or contains_secret_or_sensitive_memory(raw_quote)
+            or contains_secret_or_sensitive_memory(f"{raw_key}={raw_fact}")
+        ):
+            logger.info("Rejected sensitive/secret memory candidate (reason=secret_pattern_match)")
+            continue
+
+        cand = MemoryCandidate.from_dict(item)
+        if cand is None:
+            continue
+
+        # Re-check normalized fields as defense in depth
+        if (
+            contains_secret_or_sensitive_memory(cand.key)
+            or contains_secret_or_sensitive_memory(cand.fact)
+            or contains_secret_or_sensitive_memory(f"{cand.key}={cand.fact}")
+        ):
+            continue
+
+        if cand.key in seen_keys or cand.key in pending_keys:
+            continue
+
+        existing = entries_map.get(cand.key)
+        if existing is not None and not existing.is_expired():
+            norm_old = re.sub(r"\s+", " ", existing.fact).strip().casefold()
+            norm_new = cand.fact.casefold()
+            if norm_old == norm_new and existing.retention == cand.retention:
+                continue
+
+        seen_keys.add(cand.key)
+        validated.append(cand)
+
+    return validated
+
+
 class MemoryStore:
     """
     Хранилище долговременной памяти и инструментов управления (Memory Workbench).
-    Управляет структурированными фактами о D, категоризацией, приоритетами и поиском.
+    Управляет структурированными фактами о пользователе, категоризацией, приоритетами,
+    сроком жизни (long_term / ephemeral) и изолированной очередью кандидатов на подтверждение.
     Сохраняется в ~/.config/capri/memory.json с сохранением полной обратной совместимости.
     """
 
     def __init__(self, file_path: Optional[Path] = None):
         self.file_path = file_path or MEMORY_FILE
+        self.pending_path = self.file_path.with_name(f"pending_{self.file_path.name}")
         self.entries: Dict[str, MemoryEntry] = {}
+        self.pending_candidates: List[MemoryCandidate] = []
         self._last_loaded_mtime: float = 0.0
+        self._last_pending_mtime: float = 0.0
         self._lock = threading.RLock()
         self.load()
+        self._load_pending()
 
     def _sync_disk(self):
         """Проверяет mtime файла на диске и перезагружает состояние, если файл изменился."""
@@ -165,6 +396,69 @@ class MemoryStore:
                     self.load()
             except Exception:
                 pass
+
+    def _sync_pending_disk(self):
+        """Синхронизирует очередь кандидатов pending_memory.json, если файл обновился на диске."""
+        with self._lock:
+            if not self.pending_path.exists():
+                return
+            try:
+                mtime = self.pending_path.stat().st_mtime
+                if mtime > self._last_pending_mtime:
+                    self._load_pending()
+            except Exception:
+                pass
+
+    def _load_pending(self):
+        with self._lock:
+            if not self.pending_path.exists():
+                self.pending_candidates = []
+                return
+            try:
+                self._last_pending_mtime = self.pending_path.stat().st_mtime
+                with open(self.pending_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                loaded: List[MemoryCandidate] = []
+                if isinstance(raw, list):
+                    for item in raw:
+                        cand = MemoryCandidate.from_dict(item)
+                        if cand is not None and not (
+                            contains_secret_or_sensitive_memory(cand.key)
+                            or contains_secret_or_sensitive_memory(cand.fact)
+                            or contains_secret_or_sensitive_memory(cand.source_quote)
+                            or contains_secret_or_sensitive_memory(f"{cand.key}={cand.fact}")
+                        ):
+                            loaded.append(cand)
+                self.pending_candidates = loaded[:MAX_PENDING_CANDIDATES]
+            except Exception as ex:
+                logger.warning(f"Failed to load pending memory candidates: {ex}")
+
+    def _save_pending(self):
+        with self._lock:
+            self.pending_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.pending_path.with_name(f".{self.pending_path.name}.tmp.{time.time_ns()}")
+            try:
+                payload = [c.to_dict() for c in self.pending_candidates]
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except Exception:
+                    pass
+                tmp_path.replace(self.pending_path)
+                try:
+                    self._last_pending_mtime = self.pending_path.stat().st_mtime
+                except Exception:
+                    self._last_pending_mtime = time.time()
+            except Exception as ex:
+                logger.warning(f"Failed to save pending memory candidates: {ex}")
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
 
     def load(self):
         with self._lock:
@@ -207,6 +501,18 @@ class MemoryStore:
                     except Exception:
                         pass
 
+    def prune_expired(self, now: Optional[float] = None) -> int:
+        """Удаляет истёкшие временные (ephemeral) записи из памяти."""
+        with self._lock:
+            ref = time.time() if now is None else float(now)
+            expired_keys = [k for k, entry in self.entries.items() if entry.is_expired(now=ref)]
+            if not expired_keys:
+                return 0
+            for k in expired_keys:
+                del self.entries[k]
+            self.save()
+            return len(expired_keys)
+
     def add_or_update(
         self,
         key: str,
@@ -216,6 +522,8 @@ class MemoryStore:
         confidence: float = 1.0,
         tags: Optional[List[str]] = None,
         source: str = "user",
+        retention: str = "long_term",
+        ttl_seconds: Optional[float] = None,
     ) -> MemoryEntry:
         with self._lock:
             self._sync_disk()
@@ -227,8 +535,17 @@ class MemoryStore:
             imp = max(1, min(5, int(importance)))
             conf = max(0.0, min(1.0, float(confidence)))
             t_list = [t.lower().strip()[:32] for t in (tags or []) if t.strip()]
+            ret = (retention or "long_term").lower().strip()
+            if ret not in RETENTION_MODES:
+                ret = "long_term"
 
             now = time.time()
+            if ret == "ephemeral":
+                ttl = float(ttl_seconds) if (ttl_seconds is not None and ttl_seconds > 0) else float(DEFAULT_EPHEMERAL_TTL_SECONDS)
+                expires_at: Optional[float] = now + ttl
+            else:
+                expires_at = None
+
             if k in self.entries:
                 entry = self.entries[k]
                 entry.fact = f_text
@@ -239,6 +556,8 @@ class MemoryStore:
                 if tags is not None:
                     entry.tags = t_list
                 entry.source = source
+                entry.retention = ret
+                entry.expires_at = expires_at
             else:
                 entry = MemoryEntry(
                     key=k,
@@ -250,11 +569,147 @@ class MemoryStore:
                     updated_at=now,
                     tags=t_list,
                     source=source,
+                    retention=ret,
+                    expires_at=expires_at,
                 )
                 self.entries[k] = entry
 
             self.save()
             return entry
+
+    # ── PENDING CANDIDATES (USER-CONTROLLED MEMORY GATE) ───────────────────
+
+    def propose_candidates(self, raw_candidates: Any, user_text: str = "") -> List[MemoryCandidate]:
+        """
+        Валидирует и добавляет предложенных моделью кандидатов в изолированную очередь pending.
+        НИКОГДА не записывает в memory.json и не инъецирует в системный промпт до подтверждения пользователя.
+        """
+        with self._lock:
+            self._sync_disk()
+            self._sync_pending_disk()
+            self.prune_expired()
+            validated = validate_memory_candidates(
+                raw_candidates,
+                user_text=user_text,
+                existing_entries=self.entries,
+                existing_pending=self.pending_candidates,
+            )
+            if not validated:
+                return []
+            self.pending_candidates.extend(validated)
+            if len(self.pending_candidates) > MAX_PENDING_CANDIDATES:
+                self.pending_candidates = self.pending_candidates[-MAX_PENDING_CANDIDATES:]
+            self._save_pending()
+            return validated
+
+    def list_pending(self) -> List[MemoryCandidate]:
+        with self._lock:
+            self._sync_pending_disk()
+            return list(self.pending_candidates)
+
+    def _find_pending_index(self, cand_id_or_key: str) -> int:
+        needle = (cand_id_or_key or "").strip().lower()
+        if not needle:
+            return -1
+        # 1. Exact id match
+        for idx, cand in enumerate(self.pending_candidates):
+            if cand.id.lower() == needle:
+                return idx
+        # 2. Exact key match
+        for idx, cand in enumerate(self.pending_candidates):
+            if cand.key.lower() == needle:
+                return idx
+        # 3. Unambiguous id prefix match
+        matches = [idx for idx, cand in enumerate(self.pending_candidates) if cand.id.lower().startswith(needle)]
+        if len(matches) == 1:
+            return matches[0]
+        return -1
+
+    def get_pending(self, cand_id_or_key: str) -> Optional[MemoryCandidate]:
+        with self._lock:
+            self._sync_pending_disk()
+            idx = self._find_pending_index(cand_id_or_key)
+            if idx < 0:
+                return None
+            return self.pending_candidates[idx]
+
+    def approve_candidate(
+        self,
+        cand_id_or_key: str,
+        *,
+        key: Optional[str] = None,
+        fact: Optional[str] = None,
+        category: Optional[str] = None,
+        retention: Optional[str] = None,
+        importance: Optional[int] = None,
+        tags: Optional[List[str]] = None,
+        ttl_seconds: Optional[float] = None,
+    ) -> Optional[MemoryEntry]:
+        """Подтверждает кандидата и переносит его в активную память (memory.json)."""
+        with self._lock:
+            self._sync_disk()
+            self._sync_pending_disk()
+            idx = self._find_pending_index(cand_id_or_key)
+            if idx < 0:
+                return None
+            cand = self.pending_candidates[idx]
+            final_key = _normalize_memory_key(key) if key is not None else cand.key
+            final_fact = (fact if fact is not None else cand.fact).strip()
+            if not final_key or not final_fact:
+                return None
+
+            # Defense in depth: re-run secret filter right before saving (blocks edited secrets!)
+            raw_key_check = key if key is not None else cand.key
+            if memory_payload_contains_secret(
+                raw_key_check,
+                final_fact,
+                source_quote=cand.source_quote,
+                tags=tags,
+            ):
+                logger.warning(
+                    "Blocked approval of pending memory candidate id=%s (reason=secret_pattern_match)",
+                    cand.id,
+                )
+                return None
+
+            final_cat = category if category is not None else cand.category
+            final_ret = retention if retention is not None else cand.retention
+            final_imp = importance if importance is not None else cand.importance
+
+            entry = self.add_or_update(
+                key=final_key,
+                fact=final_fact,
+                category=final_cat,
+                importance=final_imp,
+                tags=tags,
+                source="approved_candidate",
+                retention=final_ret,
+                ttl_seconds=ttl_seconds,
+            )
+            del self.pending_candidates[idx]
+            self._save_pending()
+            return entry
+
+    def reject_candidate(self, cand_id_or_key: str) -> bool:
+        """Отклоняет и удаляет кандидата из очереди ожидания."""
+        with self._lock:
+            self._sync_pending_disk()
+            idx = self._find_pending_index(cand_id_or_key)
+            if idx < 0:
+                return False
+            del self.pending_candidates[idx]
+            self._save_pending()
+            return True
+
+    def clear_pending(self) -> int:
+        """Очищает всю очередь неподтверждённых кандидатов памяти."""
+        with self._lock:
+            self._sync_pending_disk()
+            cnt = len(self.pending_candidates)
+            if cnt:
+                self.pending_candidates = []
+                self._save_pending()
+            return cnt
 
     def delete(self, key: str) -> bool:
         with self._lock:
@@ -344,6 +799,7 @@ class MemoryStore:
     ) -> List[MemoryEntry]:
         with self._lock:
             self._sync_disk()
+            self.prune_expired()
             q = query.casefold().strip()
             cat = category.lower().strip() if category else None
             t_filter = tag.lower().strip() if tag else None
@@ -384,15 +840,18 @@ class MemoryStore:
             return []
         return self.search(query=query, category=category)[: max(1, limit)]
 
-    def get_prompt_context(self, max_tokens_budget: int = 350) -> str:
+    def get_prompt_context(self, max_tokens_budget: int = 350, user_name: str = "User") -> str:
         """
         Формирует строгий компактный блок долговременной памяти для системного промпта.
         Факты сгруппированы по категориям и отсортированы по важности.
         Ограничен по бюджету токенов (~max_tokens_budget токенов, 1 токен ~ 4 символа).
         Ключи и факты строго ограничены по длине, исключая разрастание промпта.
+        Включает ТОЛЬКО подтверждённые и не истёкшие записи (никогда pending_candidates).
         """
+        u_name = (user_name or "").strip() or "User"
         with self._lock:
             self._sync_disk()
+            self.prune_expired()
             if not self.entries:
                 return ""
 
@@ -404,7 +863,7 @@ class MemoryStore:
 
             # Бюджет по символам (~4 символа на токен)
             max_chars = max(200, max_tokens_budget * 4)
-            header = "---\n[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ О D]:\n"
+            header = f"---\n[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ ({u_name})]:\n"
             footer = "\n(Используй эти факты естественно при необходимости, не перечисляя их без повода.)\n---\n"
             budget_for_lines = max_chars - len(header) - len(footer)
 
@@ -416,15 +875,17 @@ class MemoryStore:
                 key_str = clean_k if len(clean_k) <= 40 else clean_k[:37].rstrip() + "..."
                 clean_f = entry.fact.strip().replace("\n", " ")
                 fact_str = clean_f if len(clean_f) <= 120 else clean_f[:120].rstrip() + "..."
-                entry_line_len = len(f"    • [{key_str}]: {fact_str}\n")
+                ret_suffix = " (временно)" if entry.retention == "ephemeral" else ""
+                key_disp = f"{key_str}{ret_suffix}"
+                entry_line_len = len(f"    • [{key_disp}]: {fact_str}\n")
                 if curr_len + entry_line_len > budget_for_lines:
                     if not selected_entries and budget_for_lines > 50:
                         # Если даже первый факт превысил лимит, урезаем факт под бюджет
-                        avail_fact = max(20, budget_for_lines - len(f"    • [{key_str}]: ...\n"))
+                        avail_fact = max(20, budget_for_lines - len(f"    • [{key_disp}]: ...\n"))
                         fact_str = fact_str[:avail_fact].rstrip() + "..."
-                        selected_entries.append((entry.category, key_str, fact_str))
+                        selected_entries.append((entry.category, key_disp, fact_str))
                     break
-                selected_entries.append((entry.category, key_str, fact_str))
+                selected_entries.append((entry.category, key_disp, fact_str))
                 curr_len += entry_line_len
 
             if not selected_entries:
@@ -446,51 +907,70 @@ class MemoryStore:
 
             return f"""
 ---
-[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ О D]:
+[ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ ({u_name})]:
 {chr(10).join(lines)}
 (Используй эти факты естественно при необходимости, не перечисляя их без повода.)
 ---
 """
 
-    def get_stats_card(self) -> str:
+    def get_stats_card(self, user_name: str = "User") -> str:
         """Текстовая сводка для команды /memory в Cyberdeck."""
+        u_name = (user_name or "").strip() or "User"
         with self._lock:
             self._sync_disk()
+            self._sync_pending_disk()
+            self.prune_expired()
             total = len(self.entries)
-            if total == 0:
+            pending = list(self.pending_candidates)
+
+            if total == 0 and not pending:
                 return (
-                    "🧠 MEMORY WORKBENCH // ДОЛГОВРЕМЕННАЯ ПАМЯТЬ D:\n"
+                    f"🧠 MEMORY WORKBENCH // ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ({u_name}):\n"
                     "  Память пуста. Запомни факты через: /memory add <ключ> <факт> или в диалоге."
                 )
 
-            cat_counts = {}
-            for cat in CATEGORIES:
-                cnt = sum(1 for e in self.entries.values() if e.category == cat)
-                if cnt > 0:
-                    cat_counts[cat] = cnt
-
             lines = [
-                f"🧠 MEMORY WORKBENCH // ДОЛГОВРЕМЕННАЯ ПАМЯТЬ D (Всего записей: {total}):",
+                f"🧠 MEMORY WORKBENCH // ДОЛГОВРЕМЕННАЯ ПАМЯТЬ ({u_name}, всего записей: {total}):",
             ]
-            cat_summary = ", ".join(f"{CATEGORY_LABELS.get(c, c)}: {n}" for c, n in cat_counts.items())
-            lines.append(f"  Категории: {cat_summary}\n")
+            if total > 0:
+                cat_counts = {}
+                for cat in CATEGORIES:
+                    cnt = sum(1 for e in self.entries.values() if e.category == cat)
+                    if cnt > 0:
+                        cat_counts[cat] = cnt
 
-            for cat in CATEGORIES:
-                items = [e for e in self.entries.values() if e.category == cat]
-                if not items:
-                    continue
-                lbl = CATEGORY_LABELS.get(cat, cat.capitalize())
-                lines.append(f"  [{lbl.upper()}]:")
-                for it in sorted(items, key=lambda x: (x.importance, x.updated_at), reverse=True):
-                    stars = "★" * it.importance
-                    lines.append(f"    • [{it.key}] ({stars}): {it.fact}")
+                cat_summary = ", ".join(f"{CATEGORY_LABELS.get(c, c)}: {n}" for c, n in cat_counts.items())
+                lines.append(f"  Категории: {cat_summary}\n")
 
-            lines.append("\n  Команды: /memory add <ключ> <факт> | /memory edit <ключ> <факт> | /forget <ключ> | /memory workbench")
+                for cat in CATEGORIES:
+                    items = [e for e in self.entries.values() if e.category == cat]
+                    if not items:
+                        continue
+                    lbl = CATEGORY_LABELS.get(cat, cat.capitalize())
+                    lines.append(f"  [{lbl.upper()}]:")
+                    for it in sorted(items, key=lambda x: (x.importance, x.updated_at), reverse=True):
+                        stars = "★" * it.importance
+                        ret_tag = " [временно]" if it.retention == "ephemeral" else ""
+                        lines.append(f"    • [{it.key}] ({stars}){ret_tag}: {it.fact}")
+            else:
+                lines.append("  Подтверждённых записей пока нет.")
+
+            if pending:
+                lines.append(f"\n  [ОЖИДАЮТ ПОДТВЕРЖДЕНИЯ ({len(pending)})]:")
+                for cand in pending:
+                    ret_lbl = "временно 72ч" if cand.retention == "ephemeral" else "постоянно"
+                    lines.append(f"    • {cand.id} [{cand.key}] ({ret_lbl}): {cand.fact}")
+
+            lines.append(
+                "\n  Команды: /memory add <ключ> <факт> | /memory edit <ключ> <факт> | "
+                "/memory pending | /memory approve <id> | /memory reject <id> | /forget <ключ> | /memory workbench"
+            )
             return "\n".join(lines)
 
     def export_dict(self) -> dict:
         with self._lock:
             self._sync_disk()
+            self.prune_expired()
             return {k: v.to_dict() for k, v in self.entries.items()}
 
     def import_dict(self, data: dict) -> int:

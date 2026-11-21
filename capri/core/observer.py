@@ -321,7 +321,7 @@ class DesktopObserver:
 
         # В режиме NORMAL — короткая реплика
         try:
-            user_name = getattr(self.agent.config.companion, "user_name", "D") or "D"
+            user_name = getattr(self.agent.config.companion, "user_name", "User") or "User"
             prompt = (
                 f"Пользователь {user_name} только что открыл окно '{app_id}' (заголовок: '{title}'). "
                 f"Твоё текущее настроение: {self.emotions.mood}, доверие: {self.emotions.trust}/100. "
@@ -330,7 +330,7 @@ class DesktopObserver:
             )
 
             messages = [
-                {"role": "system", "content": self.agent.system_prompt + self.emotions.get_prompt_context()},
+                {"role": "system", "content": self.agent.system_prompt + self.emotions.get_prompt_context(user_name=user_name)},
                 {"role": "user", "content": prompt},
             ]
 

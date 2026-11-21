@@ -88,7 +88,15 @@ from ..core.config import (
     update_env_value,
 )
 from ..core.emotions import EmotionEngine
-from ..core.memory import CATEGORIES, CATEGORY_LABELS, MemoryEntry, MemoryStore
+from ..core.memory import (
+    CATEGORIES,
+    CATEGORY_LABELS,
+    RETENTION_MODES,
+    MemoryCandidate,
+    MemoryEntry,
+    MemoryStore,
+    memory_payload_contains_secret,
+)
 from ..core.models import fetch_available_models, format_models_list, resolve_model_name
 from ..core.prompts import get_system_prompt
 from ..core.sessions import SessionRecord, TurnRecord
@@ -298,10 +306,10 @@ class ChatMessageCard(QFrame):
             b_layout.setContentsMargins(14, 10, 14, 11)
             b_layout.setSpacing(6)
 
-            badge = UserMonogramBadge(letter=self.sender or "D", size=20, parent=self.bubble)
+            badge = UserMonogramBadge(letter=self.sender or "User", size=20, parent=self.bubble)
             header_layout.addWidget(badge)
 
-            lbl_name = QLabel(self.sender or "D")
+            lbl_name = QLabel(self.sender or "User")
             lbl_name.setStyleSheet(f"""
                 color: {COLORS.text_primary};
                 font-family: {TYPE.sans};
@@ -1072,6 +1080,7 @@ class AgentWorker(QThread):
     chunk_signal = Signal(str)
     speaking_signal = Signal()
     text_ready_signal = Signal(str)
+    memory_candidates_signal = Signal(list)
     finished_signal = Signal()
     error_signal = Signal(str)
     cancelled_signal = Signal()
@@ -1188,6 +1197,10 @@ class AgentWorker(QThread):
                     self.chunk_signal.emit(event.data)
                 elif event.type == "speaking":
                     self.speaking_signal.emit()
+                elif event.type == "memory_candidates":
+                    cands = event.metadata.get("candidates") or []
+                    if cands:
+                        self.memory_candidates_signal.emit(list(cands))
                 elif event.type == "done":
                     full_text = event.data
                     if full_text and full_text.strip():
@@ -1444,7 +1457,7 @@ class CapriFirstRunWizard(QDialog):
         lbl_name = QLabel("Как к тебе обращаться?")
         lbl_name.setStyleSheet(f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 12px; font-weight: 600;")
         layout.addWidget(lbl_name)
-        self.edit_user_name = QLineEdit(getattr(self.config.companion, "user_name", "D") or "D")
+        self.edit_user_name = QLineEdit(getattr(self.config.companion, "user_name", "User") or "User")
         self.edit_user_name.setMinimumHeight(36)
         self.edit_user_name.setPlaceholderText("Например: D, Alex, Kai")
         layout.addWidget(self.edit_user_name)
@@ -1693,7 +1706,7 @@ class CapriResetDialog(QDialog):
         )
         right_layout.addWidget(lbl_title)
 
-        user_name = getattr(getattr(getattr(parent, "config", None), "companion", None), "user_name", "D") or "D"
+        user_name = getattr(getattr(getattr(parent, "config", None), "companion", None), "user_name", "User") or "User"
         lbl_quote = QLabel(f"«Думаешь, я так просто забуду все твои грешки, {user_name}?»")
         lbl_quote.setWordWrap(True)
         lbl_quote.setStyleSheet(
@@ -2027,7 +2040,7 @@ class CapriProviderSettingsDialog(QDialog):
         self.edit_user_name = QLineEdit()
         self.edit_user_name.setMinimumHeight(36)
         self.edit_user_name.setPlaceholderText("Например: D, Alex, Kai...")
-        self.edit_user_name.setText(getattr(self.config.companion, "user_name", "D") or "D")
+        self.edit_user_name.setText(getattr(self.config.companion, "user_name", "User") or "User")
         pref_layout.addWidget(self.edit_user_name)
 
         pref_layout.addWidget(_field_label("Политика безопасности инструментов (ToolPolicyEngine)"))
@@ -3142,13 +3155,16 @@ class CapriSessionsDialog(QDialog):
             f"UUID: {sess.id}\nСоздана: {created_str}  ·  Обновлена: {updated_str}\nРаундов: {sess.turn_count}"
         )
 
+        u_name = (
+            getattr(getattr(getattr(self.parent(), "config", None), "companion", None), "user_name", "") or ""
+        ).strip() or "User"
         turns = self.session_manager.get_recent_turns(session_id, limit=30)
         if turns:
             lines = []
             for t in turns:
                 is_pro = getattr(t, "status", "") == "proactive" or (t.user_text or "").startswith("[INITIATIVE //")
                 if t.user_text and not is_pro:
-                    lines.append(f"<b style='color: {COLORS.coral};'>D:</b> {html.escape(t.user_text)}")
+                    lines.append(f"<b style='color: {COLORS.coral};'>{html.escape(u_name)}:</b> {html.escape(t.user_text)}")
                 if t.assistant_text:
                     clean_resp = html.escape(t.assistant_text).replace("\n", "<br>")
                     lines.append(f"<b style='color: {COLORS.signal_cyan};'>Капри:</b> {clean_resp}")
@@ -3207,15 +3223,26 @@ class CapriSessionsDialog(QDialog):
 
 
 class CapriMemoryEditDialog(QDialog):
-    """Add/edit dialog for Memory Workbench entries."""
+    """Add/edit dialog for Memory Workbench entries and pending candidates."""
 
-    def __init__(self, parent=None, entry: Optional[MemoryEntry] = None, default_category: str = "general"):
+    def __init__(
+        self,
+        parent=None,
+        entry: Optional[MemoryEntry] = None,
+        default_category: str = "general",
+        candidate: Optional[MemoryCandidate] = None,
+    ):
         super().__init__(parent)
         self.entry = entry
-        is_edit = entry is not None
+        self.candidate = candidate
+        is_edit = entry is not None and candidate is None
+        is_candidate = candidate is not None
 
-        self.setWindowTitle("Редактор памяти — Capri" if is_edit else "Новый факт памяти — Capri")
-        self.resize(520, 420)
+        if is_candidate:
+            self.setWindowTitle("Подтверждение кандидата памяти — Capri")
+        else:
+            self.setWindowTitle("Редактор памяти — Capri" if is_edit else "Новый факт памяти — Capri")
+        self.resize(540, 440)
         self.setModal(True)
         self.setStyleSheet(dialog_base_qss())
 
@@ -3224,17 +3251,29 @@ class CapriMemoryEditDialog(QDialog):
         layout.setSpacing(12)
 
         user_name = getattr(getattr(getattr(parent, "cyberdeck", None), "config", None), "companion", None)
-        u_label = getattr(user_name, "user_name", "D") if user_name else "D"
+        if user_name is None:
+            user_name = getattr(getattr(parent, "config", None), "companion", None)
+        u_label = getattr(user_name, "user_name", "User") if user_name else "User"
+        if is_candidate:
+            hdr_title = "Проверка кандидата памяти"
+        else:
+            hdr_title = "Редактирование факта" if is_edit else f"Новый факт о {u_label}"
         layout.addLayout(
             _make_dialog_header(
-                "Редактирование факта" if is_edit else f"Новый факт о {u_label}",
+                hdr_title,
                 "MEMORY WORKBENCH",
                 self.reject,
             )
         )
 
+        init_key = candidate.key if is_candidate else (entry.key if entry else "")
+        init_cat = candidate.category if is_candidate else (entry.category if entry else default_category)
+        init_imp = candidate.importance if is_candidate else (entry.importance if entry else 3)
+        init_ret = candidate.retention if is_candidate else (getattr(entry, "retention", "long_term") if entry else "long_term")
+        init_fact = candidate.fact if is_candidate else (entry.fact if entry else "")
+
         layout.addWidget(QLabel("Ключ (идентификатор факта)"))
-        self.edit_key = QLineEdit(entry.key if entry else "")
+        self.edit_key = QLineEdit(init_key)
         self.edit_key.setMinimumHeight(34)
         self.edit_key.setPlaceholderText("например: favorite_editor, stack, habit...")
         if is_edit:
@@ -3242,7 +3281,7 @@ class CapriMemoryEditDialog(QDialog):
         layout.addWidget(self.edit_key)
 
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(10)
 
         cat_box = QVBoxLayout()
         cat_box.addWidget(QLabel("Категория"))
@@ -3251,7 +3290,7 @@ class CapriMemoryEditDialog(QDialog):
         for cat in CATEGORIES:
             lbl = CATEGORY_LABELS.get(cat, cat)
             self.combo_cat.addItem(f"{lbl} ({cat})", cat)
-        idx = self.combo_cat.findData(entry.category if entry else default_category)
+        idx = self.combo_cat.findData(init_cat)
         if idx >= 0:
             self.combo_cat.setCurrentIndex(idx)
         cat_box.addWidget(self.combo_cat)
@@ -3266,21 +3305,38 @@ class CapriMemoryEditDialog(QDialog):
         self.combo_imp.addItem("★★★☆☆ (3 — Стандартная)", 3)
         self.combo_imp.addItem("★★★★☆ (4 — Высокая)", 4)
         self.combo_imp.addItem("★★★★★ (5 — Критическая)", 5)
-        cur_imp = entry.importance if entry else 3
-        idx_imp = self.combo_imp.findData(cur_imp)
+        idx_imp = self.combo_imp.findData(init_imp)
         if idx_imp >= 0:
             self.combo_imp.setCurrentIndex(idx_imp)
         imp_box.addWidget(self.combo_imp)
         row.addLayout(imp_box)
+
+        ret_box = QVBoxLayout()
+        ret_box.addWidget(QLabel("Срок хранения"))
+        self.combo_retention = QComboBox()
+        self.combo_retention.setMinimumHeight(34)
+        self.combo_retention.addItem("Постоянно", "long_term")
+        self.combo_retention.addItem("Временно (72ч)", "ephemeral")
+        idx_ret = self.combo_retention.findData(init_ret if init_ret in RETENTION_MODES else "long_term")
+        if idx_ret >= 0:
+            self.combo_retention.setCurrentIndex(idx_ret)
+        ret_box.addWidget(self.combo_retention)
+        row.addLayout(ret_box)
 
         layout.addLayout(row)
 
         layout.addWidget(QLabel("Текст факта"))
         self.edit_fact = QTextEdit()
         self.edit_fact.setPlaceholderText("Опиши факт или знание...")
-        self.edit_fact.setPlainText(entry.fact if entry else "")
+        self.edit_fact.setPlainText(init_fact)
         self.edit_fact.setMaximumHeight(96)
         layout.addWidget(self.edit_fact)
+
+        if is_candidate and candidate.source_quote:
+            lbl_quote = QLabel(f"Источник из диалога: «{candidate.source_quote}»")
+            lbl_quote.setWordWrap(True)
+            lbl_quote.setStyleSheet(f"color: {COLORS.text_muted}; font-size: 11px;")
+            layout.addWidget(lbl_quote)
 
         layout.addWidget(QLabel("Теги (через запятую)"))
         self.edit_tags = QLineEdit(", ".join(entry.tags) if entry and entry.tags else "")
@@ -3299,7 +3355,7 @@ class CapriMemoryEditDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton("Сохранить")
+        self.btn_save = QPushButton("Запомнить" if is_candidate else "Сохранить")
         self.btn_save.setIcon(get_icon("check", COLORS.text_on_accent, 14))
         self.btn_save.setMinimumHeight(36)
         self.btn_save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -3316,6 +3372,14 @@ class CapriMemoryEditDialog(QDialog):
         if not k or not f:
             QMessageBox.warning(self, "Ошибка", "Ключ и текст факта не могут быть пустыми.")
             return
+        tags = [t.strip().lower() for t in self.edit_tags.text().split(",") if t.strip()]
+        if memory_payload_contains_secret(k, f, tags=tags):
+            QMessageBox.warning(
+                self,
+                "Секреты запрещены",
+                "Пароли, API-ключи, токены, PIN-коды и другие секреты не сохраняются в память.",
+            )
+            return
         self.accept()
 
     def get_data(self) -> dict:
@@ -3326,6 +3390,7 @@ class CapriMemoryEditDialog(QDialog):
             "fact": self.edit_fact.toPlainText().strip(),
             "category": self.combo_cat.currentData(),
             "importance": self.combo_imp.currentData(),
+            "retention": self.combo_retention.currentData() or "long_term",
             "tags": tags,
         }
 
@@ -3386,9 +3451,59 @@ class CapriMemoryWorkbenchDialog(QDialog):
 
         layout.addLayout(bar)
 
+        # Pending memory candidates review strip (hidden when queue is empty)
+        self.pending_frame = QFrame(self)
+        self.pending_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS.surface_raised};
+                border: 1px solid {COLORS.crimson};
+                border-radius: 10px;
+            }}
+        """)
+        pf_layout = QHBoxLayout(self.pending_frame)
+        pf_layout.setContentsMargins(12, 8, 12, 8)
+        pf_layout.setSpacing(10)
+
+        pf_text_col = QVBoxLayout()
+        pf_text_col.setSpacing(2)
+        self.lbl_wb_pending_title = QLabel("")
+        self.lbl_wb_pending_title.setStyleSheet(
+            f"color: {COLORS.crimson}; font-family: {TYPE.mono}; font-size: 10px; font-weight: 700; border: none;"
+        )
+        self.lbl_wb_pending_body = QLabel("")
+        self.lbl_wb_pending_body.setWordWrap(True)
+        self.lbl_wb_pending_body.setStyleSheet(f"color: {COLORS.text_primary}; font-size: 12px; border: none;")
+        pf_text_col.addWidget(self.lbl_wb_pending_title)
+        pf_text_col.addWidget(self.lbl_wb_pending_body)
+        pf_layout.addLayout(pf_text_col, stretch=1)
+
+        self.btn_wb_approve = QPushButton("Запомнить")
+        self.btn_wb_approve.setMinimumHeight(30)
+        self.btn_wb_approve.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_wb_approve.setStyleSheet(button_primary_qss("4px 12px"))
+        self.btn_wb_approve.clicked.connect(self._on_approve_top_pending)
+        pf_layout.addWidget(self.btn_wb_approve)
+
+        self.btn_wb_edit_pending = QPushButton("Править")
+        self.btn_wb_edit_pending.setMinimumHeight(30)
+        self.btn_wb_edit_pending.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_wb_edit_pending.setStyleSheet(button_secondary_qss("4px 10px"))
+        self.btn_wb_edit_pending.clicked.connect(self._on_edit_top_pending)
+        pf_layout.addWidget(self.btn_wb_edit_pending)
+
+        self.btn_wb_reject = QPushButton("Отклонить")
+        self.btn_wb_reject.setMinimumHeight(30)
+        self.btn_wb_reject.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_wb_reject.setStyleSheet(button_danger_qss(filled=False, padding="4px 10px"))
+        self.btn_wb_reject.clicked.connect(self._on_reject_top_pending)
+        pf_layout.addWidget(self.btn_wb_reject)
+
+        self.pending_frame.setVisible(False)
+        layout.addWidget(self.pending_frame)
+
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        user_name = getattr(self.cyberdeck.config.companion, "user_name", "D") or "D"
+        user_name = getattr(self.cyberdeck.config.companion, "user_name", "User") or "User"
         self.table.setHorizontalHeaderLabels(["Ключ", f"Факт о {user_name}", "Категория", "Важность", "Обновлено"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -3484,6 +3599,8 @@ class CapriMemoryWorkbenchDialog(QDialog):
             item_imp.setForeground(QColor(COLORS.amber))
 
             upd_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.updated_at))
+            if getattr(entry, "retention", "long_term") == "ephemeral":
+                upd_str += " · врем."
             item_u = QTableWidgetItem(upd_str)
             item_u.setForeground(QColor(COLORS.text_muted))
 
@@ -3495,7 +3612,69 @@ class CapriMemoryWorkbenchDialog(QDialog):
 
         total = len(self.store.entries)
         visible = len(results)
-        self.lbl_status.setText(f"Отображается записей: {visible} из {total}  ·  Категория: {cat or 'все'}")
+        pending = self.store.list_pending()
+        pend_note = f"  ·  На проверке: {len(pending)}" if pending else ""
+        self.lbl_status.setText(f"Отображается записей: {visible} из {total}  ·  Категория: {cat or 'все'}{pend_note}")
+        self._refresh_pending_banner()
+
+    def _refresh_pending_banner(self):
+        pending = self.store.list_pending()
+        if not pending:
+            self.pending_frame.setVisible(False)
+            return
+        top = pending[0]
+        ret_lbl = "ВРЕМЕННО 72Ч" if top.retention == "ephemeral" else "ПОСТОЯННО"
+        self.lbl_wb_pending_title.setText(
+            f"КАНДИДАТ ПАМЯТИ (1/{len(pending)}) · {ret_lbl} · #{top.id}"
+        )
+        self.lbl_wb_pending_body.setText(f"[{top.key}]: {top.fact}")
+        if top.source_quote:
+            self.lbl_wb_pending_body.setToolTip(f"Источник: «{top.source_quote}»")
+        else:
+            self.lbl_wb_pending_body.setToolTip("")
+        self.pending_frame.setVisible(True)
+
+    def _notify_cyberdeck_memory_changed(self):
+        if hasattr(self.cyberdeck, "_refresh_memory_candidate_bar"):
+            self.cyberdeck._refresh_memory_candidate_bar()
+        if hasattr(self.cyberdeck, "refresh_stats"):
+            self.cyberdeck.refresh_stats()
+
+    def _on_approve_top_pending(self):
+        pending = self.store.list_pending()
+        if not pending:
+            return
+        self.store.approve_candidate(pending[0].id)
+        self._refresh_table()
+        self._notify_cyberdeck_memory_changed()
+
+    def _on_edit_top_pending(self):
+        pending = self.store.list_pending()
+        if not pending:
+            return
+        cand = pending[0]
+        dlg = CapriMemoryEditDialog(self, candidate=cand)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            data = dlg.get_data()
+            self.store.approve_candidate(
+                cand.id,
+                key=data["key"],
+                fact=data["fact"],
+                category=data["category"],
+                importance=data["importance"],
+                retention=data.get("retention", cand.retention),
+                tags=data["tags"],
+            )
+            self._refresh_table()
+            self._notify_cyberdeck_memory_changed()
+
+    def _on_reject_top_pending(self):
+        pending = self.store.list_pending()
+        if not pending:
+            return
+        self.store.reject_candidate(pending[0].id)
+        self._refresh_table()
+        self._notify_cyberdeck_memory_changed()
 
     def _get_selected_key(self) -> Optional[str]:
         row = self.table.currentRow()
@@ -3514,10 +3693,12 @@ class CapriMemoryWorkbenchDialog(QDialog):
                 fact=data["fact"],
                 category=data["category"],
                 importance=data["importance"],
+                retention=data.get("retention", "long_term"),
                 tags=data["tags"],
                 source="workbench",
             )
             self._refresh_table()
+            self._notify_cyberdeck_memory_changed()
 
     def _on_edit(self):
         k = self._get_selected_key()
@@ -3533,10 +3714,12 @@ class CapriMemoryWorkbenchDialog(QDialog):
                 fact=data["fact"],
                 category=data["category"],
                 importance=data["importance"],
+                retention=data.get("retention", getattr(entry, "retention", "long_term")),
                 tags=data["tags"],
                 source="workbench",
             )
             self._refresh_table()
+            self._notify_cyberdeck_memory_changed()
 
     def _on_delete(self):
         k = self._get_selected_key()
@@ -4339,6 +4522,59 @@ class CapriCyberdeckWindow(QWidget):
         )
         composer_col_layout.addWidget(self.visualizer)
 
+        # User-controlled Pending Memory Candidate approval bar (hidden when queue is empty)
+        self.memory_candidate_bar = QFrame(composer_col)
+        self.memory_candidate_bar.setObjectName("MemoryCandidateBar")
+        self.memory_candidate_bar.setStyleSheet(f"""
+            QFrame#MemoryCandidateBar {{
+                background: {COLORS.surface_raised};
+                border: 1px solid {COLORS.crimson};
+                border-radius: 12px;
+            }}
+        """)
+        mem_bar_layout = QHBoxLayout(self.memory_candidate_bar)
+        mem_bar_layout.setContentsMargins(12, 8, 10, 8)
+        mem_bar_layout.setSpacing(8)
+
+        mem_text_col = QVBoxLayout()
+        mem_text_col.setContentsMargins(0, 0, 0, 0)
+        mem_text_col.setSpacing(2)
+
+        self.lbl_mem_cand_badge = QLabel("")
+        self.lbl_mem_cand_badge.setStyleSheet(
+            f"color: {COLORS.crimson}; font-family: {TYPE.mono}; font-size: 10px; font-weight: 700; border: none;"
+        )
+        self.lbl_mem_cand_text = QLabel("")
+        self.lbl_mem_cand_text.setWordWrap(True)
+        self.lbl_mem_cand_text.setStyleSheet(f"color: {COLORS.text_primary}; font-size: 12px; border: none;")
+        mem_text_col.addWidget(self.lbl_mem_cand_badge)
+        mem_text_col.addWidget(self.lbl_mem_cand_text)
+        mem_bar_layout.addLayout(mem_text_col, stretch=1)
+
+        self.btn_mem_approve = QPushButton("Запомнить")
+        self.btn_mem_approve.setMinimumHeight(28)
+        self.btn_mem_approve.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_mem_approve.setStyleSheet(button_primary_qss("4px 11px"))
+        self.btn_mem_approve.clicked.connect(self._on_approve_pending_memory)
+        mem_bar_layout.addWidget(self.btn_mem_approve)
+
+        self.btn_mem_edit = QPushButton("Править")
+        self.btn_mem_edit.setMinimumHeight(28)
+        self.btn_mem_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_mem_edit.setStyleSheet(button_secondary_qss("4px 10px"))
+        self.btn_mem_edit.clicked.connect(self._on_edit_pending_memory)
+        mem_bar_layout.addWidget(self.btn_mem_edit)
+
+        self.btn_mem_reject = QPushButton("Отклонить")
+        self.btn_mem_reject.setMinimumHeight(28)
+        self.btn_mem_reject.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_mem_reject.setStyleSheet(button_danger_qss(filled=False, padding="4px 10px"))
+        self.btn_mem_reject.clicked.connect(self._on_reject_pending_memory)
+        mem_bar_layout.addWidget(self.btn_mem_reject)
+
+        self.memory_candidate_bar.setVisible(False)
+        composer_col_layout.addWidget(self.memory_candidate_bar)
+
         # Sleek Composer Capsule with custom Crimson corner glow
         self.composer_capsule = ComposerCapsuleFrame(composer_col)
         capsule_layout = QVBoxLayout(self.composer_capsule)
@@ -4446,6 +4682,84 @@ class CapriCyberdeckWindow(QWidget):
         self._reset_mic_button()
         self._reset_send_button()
         self._apply_composer_state()
+        self._refresh_memory_candidate_bar()
+        self.refresh_stats()
+
+    def _refresh_memory_candidate_bar(self):
+        if not hasattr(self, "memory_candidate_bar"):
+            return
+        mem_store = getattr(self.agent, "memory_store", None)
+        pending = mem_store.list_pending() if mem_store is not None else []
+        if not pending:
+            self.memory_candidate_bar.setVisible(False)
+            return
+        cand = pending[0]
+        ret_lbl = "ВРЕМЕННО 72Ч" if cand.retention == "ephemeral" else "ПОСТОЯННО"
+        cat_lbl = CATEGORY_LABELS.get(cand.category, cand.category)
+        self.lbl_mem_cand_badge.setText(
+            f"ЗАПОМНИТЬ? ({1}/{len(pending)}) · {ret_lbl} · {cat_lbl.upper()}"
+        )
+        self.lbl_mem_cand_text.setText(f"[{cand.key}]: {cand.fact}")
+        tooltip = f"ID: {cand.id}"
+        if cand.source_quote:
+            tooltip += f"\nИсточник: «{cand.source_quote}»"
+        self.memory_candidate_bar.setToolTip(tooltip)
+        self.memory_candidate_bar.setVisible(True)
+
+    def _on_memory_candidates(self, _candidates: list):
+        self._refresh_memory_candidate_bar()
+        self.refresh_stats()
+
+    def _on_approve_pending_memory(self):
+        mem_store = getattr(self.agent, "memory_store", None)
+        if mem_store is None:
+            return
+        pending = mem_store.list_pending()
+        if not pending:
+            self._refresh_memory_candidate_bar()
+            return
+        cand = pending[0]
+        entry = mem_store.approve_candidate(cand.id)
+        if entry is not None:
+            play_ui_sound("ui_click")
+        self._refresh_memory_candidate_bar()
+        self.refresh_stats()
+
+    def _on_edit_pending_memory(self):
+        mem_store = getattr(self.agent, "memory_store", None)
+        if mem_store is None:
+            return
+        pending = mem_store.list_pending()
+        if not pending:
+            self._refresh_memory_candidate_bar()
+            return
+        cand = pending[0]
+        dlg = CapriMemoryEditDialog(self, candidate=cand)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            data = dlg.get_data()
+            mem_store.approve_candidate(
+                cand.id,
+                key=data["key"],
+                fact=data["fact"],
+                category=data["category"],
+                importance=data["importance"],
+                retention=data.get("retention", cand.retention),
+                tags=data["tags"],
+            )
+            play_ui_sound("ui_click")
+        self._refresh_memory_candidate_bar()
+        self.refresh_stats()
+
+    def _on_reject_pending_memory(self):
+        mem_store = getattr(self.agent, "memory_store", None)
+        if mem_store is None:
+            return
+        pending = mem_store.list_pending()
+        if not pending:
+            self._refresh_memory_candidate_bar()
+            return
+        mem_store.reject_candidate(pending[0].id)
+        self._refresh_memory_candidate_bar()
         self.refresh_stats()
 
     def _on_composer_focus_changed(self, focused: bool):
@@ -4613,7 +4927,7 @@ class CapriCyberdeckWindow(QWidget):
         menu.exec(pos)
 
     def _refresh_welcome_canvas(self, context: str = "startup"):
-        user_name = getattr(self.config.companion, "user_name", "D") or "D"
+        user_name = getattr(self.config.companion, "user_name", "User") or "User"
         greeting = self.emotions.generate_greeting(user_name=user_name, context=context)
         prov = (self.config.llm.provider or "GROQ").upper()
         subtitle = f"{self.emotions.relationship_stage_label}  ·  {prov} / {self.config.llm.model}"
@@ -5173,7 +5487,7 @@ class CapriCyberdeckWindow(QWidget):
 
     def _populate_turns_ui(self, turns: list):
         """Render stored session turns immediately without animating restored history."""
-        user_name = getattr(self.config.companion, "user_name", "D") or "D"
+        user_name = getattr(self.config.companion, "user_name", "User") or "User"
         for turn in turns:
             try:
                 t_ts = (
@@ -5287,7 +5601,7 @@ class CapriCyberdeckWindow(QWidget):
             tts_eng = (getattr(self.config.voice, "tts_engine", "fish") or "fish").upper()
             stt_eng = (getattr(self.config.voice, "stt_mode", "groq") or "groq").upper()
             vis_eng = (getattr(self.config.vision, "provider", "gemini") or "gemini").upper() if getattr(self.config.vision, "enabled", True) else "OFF"
-            u_name = getattr(self.config.companion, "user_name", "D") or "D"
+            u_name = getattr(self.config.companion, "user_name", "User") or "User"
             self.btn_provider.setText(prov_name)
             self._refresh_welcome_canvas(context="startup")
             play_ui_sound("ui_click")
@@ -5350,11 +5664,13 @@ class CapriCyberdeckWindow(QWidget):
         ctx_store = getattr(self.agent, "context_store", None)
         emotions = getattr(self.agent, "emotions", None)
         mode = getattr(self.config.companion, "mode", "normal")
+        u_name = (getattr(self.config.companion, "user_name", "") or "").strip() or "User"
         rec = init_engine.evaluate(
             companion_mode=mode,
             context_store=ctx_store,
             emotions=emotions,
             game_mode_active=gm_active,
+            user_name=u_name,
         )
         if rec:
             self._handle_initiative_event(rec)
@@ -5439,7 +5755,10 @@ class CapriCyberdeckWindow(QWidget):
             try:
                 mem_store = getattr(self.agent, "memory_store", None)
                 if mem_store is not None and hasattr(self, "lbl_metric_memory"):
-                    self.lbl_metric_memory.setText(f"{len(mem_store.get_all())} фактов")
+                    saved_cnt = len(mem_store.entries)
+                    pend_cnt = len(mem_store.list_pending())
+                    label = f"{saved_cnt} фактов (+{pend_cnt})" if pend_cnt else f"{saved_cnt} фактов"
+                    self.lbl_metric_memory.setText(label)
             except Exception:
                 pass
         if hasattr(self, "lbl_metric_tools"):
@@ -5598,6 +5917,7 @@ class CapriCyberdeckWindow(QWidget):
                 self.worker.chunk_signal.disconnect()
                 self.worker.speaking_signal.disconnect()
                 self.worker.text_ready_signal.disconnect()
+                self.worker.memory_candidates_signal.disconnect()
                 self.worker.finished_signal.disconnect()
                 self.worker.cancelled_signal.disconnect()
                 self.worker.error_signal.disconnect()
@@ -5716,7 +6036,7 @@ class CapriCyberdeckWindow(QWidget):
         play_ui_sound("ui_click")
         if hasattr(self, "agent") and hasattr(self.agent, "initiative_engine") and self.agent.initiative_engine:
             self.agent.initiative_engine.record_user_activity()
-        user_name = getattr(self.config.companion, "user_name", "D") or "D"
+        user_name = getattr(self.config.companion, "user_name", "User") or "User"
         from ..core.attachments import format_user_display_with_attachments
         display_text = format_user_display_with_attachments(text, pending_attachments)
         self.current_user_card = self._append_message(user_name, display_text)
@@ -5789,6 +6109,7 @@ class CapriCyberdeckWindow(QWidget):
                 self.worker.chunk_signal.disconnect()
                 self.worker.speaking_signal.disconnect()
                 self.worker.text_ready_signal.disconnect()
+                self.worker.memory_candidates_signal.disconnect()
                 self.worker.finished_signal.disconnect()
                 self.worker.cancelled_signal.disconnect()
                 self.worker.error_signal.disconnect()
@@ -5809,6 +6130,7 @@ class CapriCyberdeckWindow(QWidget):
         self.worker.chunk_signal.connect(self._on_stream_chunk)
         self.worker.speaking_signal.connect(self._on_speaking_started)
         self.worker.text_ready_signal.connect(self._on_text_ready)
+        self.worker.memory_candidates_signal.connect(self._on_memory_candidates)
         self.worker.finished_signal.connect(self._on_speech_finished)
         self.worker.cancelled_signal.connect(self._on_cancelled)
         self.worker.error_signal.connect(self._on_error)
@@ -6027,7 +6349,7 @@ class CapriCyberdeckWindow(QWidget):
                 "• /mood (/rel) — настроение, стадия связи и доверие\n"
                 "• /context (/work) — рабочий контекст, задачи и решения\n"
                 "• /initiative (/proactive) — настройки самостоятельной инициативы\n"
-                "• /memory (/workbench) — Memory Workbench: просмотр и правка памяти\n"
+                "• /memory (/workbench) — Memory Workbench: память, /memory pending | approve <id> | reject <id>\n"
                 "• /forget <ключ> — удалить факт из памяти\n"
                 "• /focus [окно] / /windows — управление окнами Niri\n"
                 "• /avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle] — управление аватаром\n"
@@ -6047,7 +6369,7 @@ class CapriCyberdeckWindow(QWidget):
             trust = self.emotions.trust
             irrit = self.emotions.irritation
             mood = self.emotions.mood
-            u_name = getattr(self.config.companion, "user_name", "D") or "D"
+            u_name = getattr(self.config.companion, "user_name", "User") or "User"
             mood_ru = {
                 "playful": "Игривое / Озорное",
                 "warm": "Тёплое / Лояльное",
@@ -6108,9 +6430,52 @@ class CapriCyberdeckWindow(QWidget):
             if cmd in ("/workbench", "/memwb") or sub in ("workbench", "ui", "gui", "wb"):
                 dlg = CapriMemoryWorkbenchDialog(self)
                 dlg.exec()
+                self._refresh_memory_candidate_bar()
+                self.refresh_stats()
                 return
 
-            if sub == "clear":
+            if sub in ("pending", "candidates", "queue"):
+                pending = mem_store.list_pending()
+                if not pending:
+                    self._append_message("Система", "Очередь кандидатов памяти пуста.")
+                else:
+                    lines = [f"Кандидаты памяти на подтверждение ({len(pending)}):"]
+                    for cand in pending:
+                        ret_lbl = "временно 72ч" if cand.retention == "ephemeral" else "постоянно"
+                        cat_lbl = CATEGORY_LABELS.get(cand.category, cand.category)
+                        quote_part = f" · «{cand.source_quote}»" if cand.source_quote else ""
+                        lines.append(f"  • {cand.id} [{cand.key}] ({cat_lbl}, {ret_lbl}): {cand.fact}{quote_part}")
+                    lines.append("\nКоманды: /memory approve <id> | /memory reject <id|all>")
+                    self._append_message("Система", "\n".join(lines))
+                self._refresh_memory_candidate_bar()
+            elif sub in ("approve", "accept", "confirm"):
+                if len(parts) < 3:
+                    self._append_message("Система", "Использование: /memory approve <id_или_ключ>")
+                else:
+                    target_id = parts[2]
+                    entry = mem_store.approve_candidate(target_id)
+                    if entry is not None:
+                        ret_tag = " (временно 72ч)" if entry.retention == "ephemeral" else ""
+                        self._append_message("Система", f"Подтверждено и сохранено: [{entry.key}]{ret_tag} -> '{entry.fact}'.")
+                    else:
+                        self._append_message("Система", f"Кандидат [{target_id}] не найден. Проверь /memory pending.")
+                self._refresh_memory_candidate_bar()
+                self.refresh_stats()
+            elif sub in ("reject", "dismiss", "decline"):
+                if len(parts) < 3:
+                    self._append_message("Система", "Использование: /memory reject <id_или_ключ|all>")
+                elif parts[2].lower() == "all":
+                    cnt = mem_store.clear_pending()
+                    self._append_message("Система", f"Отклонены все кандидаты памяти ({cnt}).")
+                else:
+                    target_id = parts[2]
+                    if mem_store.reject_candidate(target_id):
+                        self._append_message("Система", f"Кандидат [{target_id}] отклонён.")
+                    else:
+                        self._append_message("Система", f"Кандидат [{target_id}] не найден. Проверь /memory pending.")
+                self._refresh_memory_candidate_bar()
+                self.refresh_stats()
+            elif sub == "clear":
                 target_cat = parts[2].lower() if len(parts) > 2 else None
                 deleted_cnt = mem_store.clear(category=target_cat)
                 if target_cat:
@@ -6129,11 +6494,24 @@ class CapriCyberdeckWindow(QWidget):
             elif sub == "add" and len(parts) > 3:
                 key = parts[2]
                 fact = " ".join(parts[3:])
-                entry = mem_store.add_or_update(key, fact, category="general", importance=3, source="user")
-                self._append_message("Система", f"Запомнила: [{entry.key}] -> '{entry.fact}' ({entry.category}).")
+                if memory_payload_contains_secret(key, fact):
+                    self._append_message(
+                        "Система",
+                        "Отклонено: пароли, API-ключи, токены и другие секреты не сохраняются в память.",
+                    )
+                else:
+                    entry = mem_store.add_or_update(key, fact, category="general", importance=3, source="user")
+                    self._append_message("Система", f"Запомнила: [{entry.key}] -> '{entry.fact}' ({entry.category}).")
+                    self.refresh_stats()
             elif sub == "edit" and len(parts) > 3:
                 key = parts[2]
                 new_fact = " ".join(parts[3:])
+                if memory_payload_contains_secret(key, new_fact):
+                    self._append_message(
+                        "Система",
+                        "Отклонено: пароли, API-ключи, токены и другие секреты не сохраняются в память.",
+                    )
+                    return
                 clean_k = key.lower().strip()
                 mem_store._sync_disk()
                 if clean_k in mem_store.entries:
@@ -6188,7 +6566,8 @@ class CapriCyberdeckWindow(QWidget):
                 except Exception as ex:
                     self._append_message("Система", f"Ошибка экспорта памяти: {ex}")
             else:
-                card = mem_store.get_stats_card()
+                u_name = (getattr(self.config.companion, "user_name", "") or "").strip() or "User"
+                card = mem_store.get_stats_card(user_name=u_name)
                 self._append_message("Капри", card)
             return
 
@@ -6270,10 +6649,12 @@ class CapriCyberdeckWindow(QWidget):
             elif sub in ("trigger", "now", "force"):
                 ctx_store = getattr(self.agent, "context_store", None)
                 emotions = getattr(self.agent, "emotions", None)
-                rec = init_engine.force_trigger(context_store=ctx_store, emotions=emotions)
+                u_name = (getattr(self.config.companion, "user_name", "") or "").strip() or "User"
+                rec = init_engine.force_trigger(context_store=ctx_store, emotions=emotions, user_name=u_name)
                 self._handle_initiative_event(rec)
             else:
-                card = init_engine.get_status_card(companion_mode=mode, stage=stage)
+                u_name = (getattr(self.config.companion, "user_name", "") or "").strip() or "User"
+                card = init_engine.get_status_card(companion_mode=mode, stage=stage, user_name=u_name)
                 self._append_message("Капри", card)
             return
 
@@ -6614,7 +6995,7 @@ class CapriCyberdeckWindow(QWidget):
                     self._append_message(
                         "Система",
                         "Конфиг постоянного WebRTC AEC (`~/.config/pipewire/pipewire.conf.d/99-capri-aec.conf`):\n\n"
-                        f"```text\n{snippet}```",
+                        f"```text\n{snippet.rstrip()}\n```",
                     )
                 else:
                     pw = get_pipewire_status()
@@ -6659,7 +7040,7 @@ class CapriCyberdeckWindow(QWidget):
             else:
                 self._append_message(
                     "Система",
-                    f"{res.message}\n\n```{lang}\n{res.snippet}```\n"
+                    f"{res.message}\n\n```{lang}\n{res.snippet.rstrip()}\n```\n"
                     f"Чтобы записать правила автоматически с бэкапом, выполни: `/wm-rules {res.wm} apply`",
                 )
             return

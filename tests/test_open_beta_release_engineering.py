@@ -167,8 +167,9 @@ def test_cli_runs_cleanly_from_tmp_with_isolated_xdg_without_niri(tmp_path):
         capture_output=True,
         text=True,
     )
+    from capri import __version__ as capri_version
     assert res_ver.returncode == 0
-    assert "3.1.0" in res_ver.stdout
+    assert capri_version in res_ver.stdout
 
     res_doc = subprocess.run(
         [sys.executable, "-m", "capri.cli", "--doctor"],

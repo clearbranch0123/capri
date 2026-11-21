@@ -7,7 +7,15 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from .registry import tool
-from ..core.memory import MemoryStore, MemoryEntry, MEMORY_FILE, CATEGORIES, CATEGORY_LABELS
+from ..core.memory import (
+    MemoryStore,
+    MemoryEntry,
+    MEMORY_FILE,
+    CATEGORIES,
+    CATEGORY_LABELS,
+    RETENTION_MODES,
+    contains_secret_or_sensitive_memory,
+)
 
 _shared_store: Optional[MemoryStore] = None
 
@@ -62,14 +70,14 @@ def clear_all_memories(category: Optional[str] = None) -> bool:
 
 
 def get_memory_summary_prompt() -> str:
-    """Формирует строгий структурированный блок фактов о D для системного промпта."""
+    """Формирует строгий структурированный блок фактов о пользователе для системного промпта."""
     store = get_memory_store()
     return store.get_prompt_context()
 
 
 # ── ИНСТРУМЕНТЫ АГЕНТА (LLM TOOLS) ─────────────────────────────────────────
 
-@tool(description="Запомнить факт о пользователе D в долговременную память. key: тема/ключ, fact: текст факта, category: категория ('identity', 'preferences', 'environment', 'projects', 'constraints', 'general'), importance: важность от 1 до 5 (по умолчанию 3).")
+@tool(description="Явно сохранить факт в память по прямой просьбе пользователя (требует подтверждения политикой безопасности; для фоновых наблюдений используй memory_candidates). key: ключ, fact: текст факта, category: 'identity'|'preferences'|'environment'|'projects'|'constraints'|'general', importance: 1..5, retention: 'long_term'|'ephemeral'.")
 async def remember(
     key: str,
     fact: str = "",
@@ -77,16 +85,27 @@ async def remember(
     text: str = "",
     category: str = "general",
     importance: int = 3,
+    retention: str = "long_term",
 ) -> str:
     actual_fact = (fact or value or text).strip()
     key_clean = key.lower().strip()
     if not key_clean or not actual_fact:
         return "Укажи ключ и текст факта для сохранения."
 
+    if (
+        contains_secret_or_sensitive_memory(key_clean)
+        or contains_secret_or_sensitive_memory(actual_fact)
+        or contains_secret_or_sensitive_memory(f"{key_clean}={actual_fact}")
+    ):
+        return "Отклонено: пароли, API-ключи, токены и другие секреты не сохраняются в память."
+
     store = get_memory_store()
     clean_cat = category.lower().strip() if category else "general"
     if clean_cat not in CATEGORIES:
         clean_cat = "general"
+    clean_ret = (retention or "long_term").lower().strip()
+    if clean_ret not in RETENTION_MODES:
+        clean_ret = "long_term"
 
     entry = await asyncio.to_thread(
         store.add_or_update,
@@ -95,9 +114,11 @@ async def remember(
         category=clean_cat,
         importance=max(1, min(5, int(importance))),
         source="agent",
+        retention=clean_ret,
     )
     cat_ru = CATEGORY_LABELS.get(entry.category, entry.category)
-    return f"Запомнила: [{entry.key}] -> '{entry.fact}' (категория: {cat_ru}, важность: {'★' * entry.importance})."
+    ret_ru = ", временно 72ч" if entry.retention == "ephemeral" else ""
+    return f"Запомнила: [{entry.key}] -> '{entry.fact}' (категория: {cat_ru}, важность: {'★' * entry.importance}{ret_ru})."
 
 
 @tool(description="Вспомнить факты из долговременной памяти. query: поисковое слово (пусто = всё), category: опциональный фильтр по категории ('identity', 'preferences', 'environment', 'projects', 'constraints', 'general').")
@@ -128,7 +149,7 @@ async def forget_memory(key: str) -> str:
     return f"Ключ [{key_clean}] не найден в памяти."
 
 
-@tool(description="Обновить или изменить существующий факт в долговременной памяти. key: ключ факта, new_fact: обновленный текст, category: опциональная категория, importance: опциональная важность 1-5.")
+@tool(description="Явно обновить существующий факт в долговременной памяти по просьбе пользователя (требует подтверждения политикой безопасности). key: ключ факта, new_fact: обновленный текст, category: опциональная категория, importance: опциональная важность 1-5.")
 async def update_memory_entry(
     key: str,
     new_fact: str,
@@ -141,10 +162,25 @@ async def update_memory_entry(
     if key_clean not in store.entries:
         return f"Факт с ключом [{key_clean}] не существует в памяти. Используй remember для добавления."
 
+    if (
+        contains_secret_or_sensitive_memory(key_clean)
+        or contains_secret_or_sensitive_memory(new_fact)
+        or contains_secret_or_sensitive_memory(f"{key_clean}={new_fact}")
+    ):
+        return "Отклонено: пароли, API-ключи, токены и другие секреты не сохраняются в память."
+
     old = store.entries[key_clean]
     cat = category if category is not None else old.category
     imp = importance if importance is not None else old.importance
-    entry = await asyncio.to_thread(store.add_or_update, key_clean, new_fact, category=cat, importance=imp, source="agent")
+    entry = await asyncio.to_thread(
+        store.add_or_update,
+        key_clean,
+        new_fact,
+        category=cat,
+        importance=imp,
+        source="agent",
+        retention=old.retention,
+    )
     return f"Факт [{entry.key}] обновлен: '{entry.fact}' (категория: {entry.category}, важность: {'★' * entry.importance})."
 
 
@@ -161,6 +197,8 @@ async def list_memory_categories() -> str:
 
 @tool(description="Получить общую статистику и дашборд хранилища памяти Memory Workbench.")
 async def get_memory_workbench_stats() -> str:
+    from ..core.config import load_config
     store = get_memory_store()
-    card = store.get_stats_card()
+    u_name = (getattr(getattr(load_config(), "companion", None), "user_name", "") or "").strip() or "User"
+    card = store.get_stats_card(user_name=u_name)
     return card

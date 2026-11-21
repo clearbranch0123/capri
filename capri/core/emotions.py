@@ -93,7 +93,8 @@ class EmotionEngine:
     Строго отделен от истории конкретных сессий (sessions.db) и фактов о пользователе (memory.json).
     """
 
-    def __init__(self):
+    def __init__(self, file_path: Optional[Path] = None):
+        self._file_path: Optional[Path] = file_path
         self.trust: int = 25
         self.mood: str = "playful"
         self.irritation: int = 0
@@ -105,6 +106,9 @@ class EmotionEngine:
         self.emotional_milestones: List[EmotionalMilestone] = []
         self.last_handoff: Optional[SessionHandoff] = None
         self.load()
+
+    def _storage_path(self) -> Path:
+        return self._file_path if self._file_path is not None else EMOTION_FILE
 
     @property
     def relationship_stage(self) -> str:
@@ -135,10 +139,11 @@ class EmotionEngine:
         return labels.get(self.relationship_stage, "Напарник")
 
     def load(self):
-        if not EMOTION_FILE.exists():
+        target = self._storage_path()
+        if not target.exists():
             return
         try:
-            with open(EMOTION_FILE, "r", encoding="utf-8") as f:
+            with open(target, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 self.trust = int(data.get("trust", 25))
                 self.mood = str(data.get("mood", "playful"))
@@ -163,7 +168,8 @@ class EmotionEngine:
             logger.warning(f"Failed to load emotions: {ex}")
 
     def save(self):
-        EMOTION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        target = self._storage_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
         try:
             data = {
                 "trust": self.trust,
@@ -178,7 +184,7 @@ class EmotionEngine:
                 "emotional_milestones": [m.to_dict() for m in self.emotional_milestones[-15:]],
                 "last_handoff": self.last_handoff.to_dict() if self.last_handoff else None,
             }
-            with open(EMOTION_FILE, "w", encoding="utf-8") as f:
+            with open(target, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as ex:
             logger.warning(f"Failed to save emotions: {ex}")
@@ -288,7 +294,7 @@ class EmotionEngine:
         )
         self.save()
 
-    def generate_greeting(self, user_name: str = "D", context: str = "startup") -> str:
+    def generate_greeting(self, user_name: str = "User", context: str = "startup") -> str:
         """
         Генерирует живое, аутентичное приветствие в стиле Capri с учётом эмоциональной преемственности.
         Чистая презентация (НЕ изменяет эмоциональное состояние).
@@ -344,15 +350,17 @@ class EmotionEngine:
             return f"Терминал активен, {user_name}. Давно не заходил. Чем обязан подключению?"
         return f"Интерфейс инициализирован, {user_name}. Слушаю входящие команды."
 
-    def apply_appraisal(self, appraisal: Dict[str, Any], user_text: str = ""):
+    def apply_appraisal(self, appraisal: Dict[str, Any], user_text: str = "", user_name: str = "User"):
         """
         Обновление эмоций напрямую из структурированной когнитивной оценки модели Capri.
         Реализует:
         1. Confidence gating (защита от ложных обид при опечатках / невнятной речи).
-        2. Ограничение эмоциональных изменений (сглаживание, hard clamp, зависимость от streak и baseline trust).
-        3. Автоматическую фиксацию долговременных эмоциональных вех (Emotional Milestones).
+        2. Нейтральный дружеский ROAST (0 штрафа по доверию, раздражению и negative_streak).
+        3. Ограничение эмоциональных изменений для RUDE (сглаживание, hard clamp, streak scaling).
+        4. Автоматическую фиксацию долговременных эмоциональных вех (Emotional Milestones).
         """
         self._apply_decay()
+        u_name = (user_name or "").strip() or "User"
 
         category = str(appraisal.get("category", "CHAT")).upper().strip()
         intent = str(appraisal.get("intent", "")).strip()
@@ -384,16 +392,19 @@ class EmotionEngine:
                 suggested_mood = "playful"
 
         # 4. Проверка категорий на согласованность
-        if category in ("ROAST", "RUDE"):
+        if category == "ROAST":
+            # Дружеский подкол: полностью нейтрален к доверию, раздражению и negative_streak
+            raw_trust = 0
+            raw_irrit = 0
+        elif category == "RUDE":
             raw_trust = min(0, raw_trust)
-            if category == "ROAST" and raw_trust < -3:
-                raw_trust = -3  # Подколы — это игра/баланс
+            raw_irrit = max(0, raw_irrit)
         elif category in ("WARM", "APOLOGY"):
             raw_irrit = min(0, raw_irrit)
             raw_trust = max(0, raw_trust)
 
-        # 5. Учёт повторяемости (negative_streak)
-        is_negative = category in ("ROAST", "RUDE") and confidence >= 0.7
+        # 5. Учёт повторяемости (negative_streak) — ТОЛЬКО для реальной грубости (RUDE)
+        is_negative = category == "RUDE" and confidence >= 0.7
         if is_negative:
             self.negative_streak += 1
             if self.negative_streak == 1:
@@ -405,15 +416,10 @@ class EmotionEngine:
             else:
                 raw_trust = max(-5, raw_trust)
                 raw_irrit = min(20, raw_irrit)
-        else:
+        elif category != "ROAST":
             self.negative_streak = 0
 
-        # 6. Влияние контекста отношений (baseline trust)
-        if self.trust >= 50 and category == "ROAST":
-            raw_trust = 0
-            raw_irrit = min(5, raw_irrit)
-
-        # 7. Взвешивание по confidence и жёсткий clamp дельт
+        # 6. Взвешивание по confidence и жёсткий clamp дельт
         eff_trust = int(round(raw_trust * confidence))
         eff_irrit = int(round(raw_irrit * confidence))
 
@@ -428,7 +434,7 @@ class EmotionEngine:
         self.last_update = time.time()
         self.last_decay_time = self.last_update
 
-        # 8. Динамика настроения (mood)
+        # 7. Динамика настроения (mood)
         valid_moods = ("playful", "warm", "sarcastic", "annoyed", "neutral")
         if self.irritation >= 50 or self.negative_streak >= 3:
             self.mood = "annoyed"
@@ -442,13 +448,13 @@ class EmotionEngine:
         elif self.trust >= 45 and self.irritation < 10:
             self.mood = "warm"
 
-        # 9. Фиксация долгосрочных эмоциональных вех (Milestones) при значимых сдвигах
+        # 8. Фиксация долгосрочных эмоциональных вех (Milestones) при значимых сдвигах
         if category == "APOLOGY" and prev_irrit >= 30 and confidence >= 0.8:
             if self.last_handoff:
                 self.last_handoff.unresolved_conflict = False
             self.record_milestone(
                 category="CONFLICT_RESOLVED",
-                summary=f"D принёс извинения после напряжения: {intent or 'извинение'}",
+                summary=f"{u_name} принёс извинения после напряжения: {intent or 'извинение'}",
                 impact="Конфликт исчерпан, доверие восстанавливается",
                 confidence=confidence,
             )
@@ -464,21 +470,23 @@ class EmotionEngine:
         elif category == "RUDE" and confidence >= 0.85 and self.negative_streak >= 2:
             self.record_milestone(
                 category="BOUNDARY_SET",
-                summary=f"Обозначены личные границы после серии резких выпадов D: {intent or 'грубость'}",
+                summary=f"Обозначены личные границы после серии резких выпадов {u_name}: {intent or 'грубость'}",
                 impact="Капри держит холодную дистанцию",
                 confidence=confidence,
             )
 
-        # 10. Запись недавнего события в буфер
+        # 9. Запись недавнего события в буфер
         if category in ("ROAST", "RUDE", "APOLOGY", "WARM") and confidence >= 0.7:
             if intent:
                 desc = f"[{category}] {intent}"
-            elif category in ("ROAST", "RUDE"):
-                desc = f"[{category}] Подкол/наезд"
+            elif category == "ROAST":
+                desc = "[ROAST] Дружеский подкол"
+            elif category == "RUDE":
+                desc = "[RUDE] Резкий выпад"
             elif category == "WARM":
-                desc = f"[{category}] Тёплый контакт"
+                desc = "[WARM] Тёплый контакт"
             else:
-                desc = f"[{category}] Извинение"
+                desc = "[APOLOGY] Извинение"
             self.record_event(desc)
         else:
             self.save()
@@ -499,14 +507,12 @@ class EmotionEngine:
             self.record_event("Грубость / мат (fallback)")
             return
 
-        # 2. Подколы
+        # 2. Дружеские подколы — без штрафа по доверию, раздражению и negative_streak
         roast_match = ROAST_RE.search(text_clean)
         if roast_match:
             word = roast_match.group(0)
-            self.negative_streak += 1
-            self.irritation = min(100, self.irritation + 8)
-            self.trust = max(-100, self.trust - 1)
-            self.mood = "sarcastic"
+            if self.mood != "annoyed":
+                self.mood = "sarcastic"
             self.record_event(f"Подкол «{word}» (fallback)")
             return
 
@@ -547,25 +553,25 @@ class EmotionEngine:
             self.irritation = max(0, self.irritation - 2)
         self.save()
 
-    def get_prompt_context(self) -> str:
+    def get_prompt_context(self, user_name: str = "User") -> str:
         """Инъекция эмоционального состояния и преемственности отношений в системный промпт модели."""
+        u_name = (user_name or "").strip() or "User"
         mood_instruction = ""
 
         if self.mood == "annoyed":
             mood_instruction = (
-                "ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Ты раздражена и зла из-за грубости D. "
-                "Отвечай холодно, колко, дерзко, с резким сарказмом. Не пытайся услужить, не извиняйся и поставь его на место."
+                f"ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Ты раздражена и зла из-за грубости {u_name}. "
+                "Отвечай холодно, колко, дерзко, с резким сарказмом. Не пытайся услужить, не извиняйся и поставь на место."
             )
         elif self.mood == "sarcastic":
             mood_instruction = (
-                "ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Ты в саркастичном, язвительном настроении. D только что подколол или задел тебя. "
-                "ИНСТРУКЦИЯ К ОТВЕТУ: Отвечай с дерзким киберпанк-сарказмом, парируй подкол острой ответной колкостью! "
-                "Категорически запрещено лебезить или услужливо предлагать 'давай сделаем что-то полезное'. Держи удар и поддевай в ответ!"
+                f"ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Ты в саркастичном, игриво-язвительном настроении — {u_name} только что подколол тебя. "
+                "ИНСТРУКЦИЯ К ОТВЕТУ: Парируй подкол остроумной контратакой с ухмылкой, без злобы и без лебезения."
             )
         elif self.mood == "warm" and self.trust > 45:
             mood_instruction = (
-                f"ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Высокий уровень доверия ({self.trust:+d}/100). Ты открыта, искренна и лояльна к D как к близкому человеку. "
-                "Можешь свободно подшучивать, в том числе с лёгким чёрным киберпанк-юмором, делиться мыслями и проявлять тепло без наигранности."
+                f"ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Высокий уровень доверия ({self.trust:+d}/100). Ты открыта, искренна и лояльна к {u_name} как к близкому напарнику. "
+                "Можешь свободно подшучивать, делиться мыслями и проявлять тепло без наигранности."
             )
         elif self.mood == "playful":
             mood_instruction = (
@@ -576,10 +582,10 @@ class EmotionEngine:
             mood_instruction = "ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ: Спокойное, сосредоточенное, готовое к совместной работе."
 
         stage_directives = {
-            "estranged": "СТАДИЯ [ОТЧУЖДЕНИЕ]: Доверие подорвано. Держи холодную дистанцию, отвечай суховато, проверяй намерения D.",
+            "estranged": f"СТАДИЯ [ОТЧУЖДЕНИЕ]: Доверие подорвано. Держи холодную дистанцию, отвечай суховато, проверяй намерения {u_name}.",
             "cautious_ally": "СТАДИЯ [ОСТОРОЖНЫЙ СОЮЗНИК]: Базовая притирка. Профессиональное сотрудничество с лёгкой иронией.",
-            "trusted_partner": "СТАДИЯ [ПРОВЕРЕННЫЙ НАПАРНИК]: Прочная киберпанк-связь. Обоюдные подколы естественны, вы надежная команда.",
-            "bonded_relic": "СТАДИЯ [СИНХРОНИЗИРОВАННАЯ ЭНГРАММА]: Максимальная верность и сплоченность. Береги D, будь искренней под циничной броней.",
+            "trusted_partner": "СТАДИЯ [ПРОВЕРЕННЫЙ НАПАРНИК]: Прочная связь. Обоюдные подколы естественны, вы надёжная команда.",
+            "bonded_relic": f"СТАДИЯ [СИНХРОНИЗИРОВАННАЯ ЭНГРАММА]: Максимальная верность и сплочённость. Береги {u_name}, будь искренней под ироничной бронёй.",
         }.get(self.relationship_stage, "")
 
         absence = self.get_absence_context()
@@ -619,8 +625,9 @@ class EmotionEngine:
 ---
 """
 
-    def get_status_card(self) -> str:
+    def get_status_card(self, user_name: str = "User") -> str:
         """Форматированная карточка для команды /mood и /relationship."""
+        u_name = (user_name or "").strip() or "User"
         mood_ru = {
             "playful": "Игривое / Озорное ⚡",
             "warm": "Тёплое / Доверительное 🤍",
@@ -652,7 +659,7 @@ class EmotionEngine:
             f"[bold magenta]Эмоциональный статус и преемственность Capri:[/bold magenta]\n"
             f"  Стадия связи:    [bold green]{self.relationship_stage_label}[/bold green]\n"
             f"  Настроение:      [bold cyan]{mood_ru}[/bold cyan]\n"
-            f"  Доверие к D:     [{trust_bar}] [bold green]{self.trust:+d}[/bold green] / 100\n"
+            f"  Доверие к {u_name}: [{trust_bar}] [bold green]{self.trust:+d}[/bold green] / 100\n"
             f"  Раздражение:     [{irrit_bar}] [bold yellow]{self.irritation}%[/bold yellow]\n"
             f"  Активность:      [dim]{absence['description']}[/dim]{events_line}{milestones_line}\n"
         )

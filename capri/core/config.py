@@ -69,7 +69,7 @@ class LLMConfig(BaseModel):
     temperature: float = 0.75
     frequency_penalty: float = 0.6
     presence_penalty: float = 0.5
-    max_tokens: int = 1024
+    max_tokens: int = 2048
 
 
 class VoiceConfig(BaseModel):
@@ -102,7 +102,7 @@ class VoiceConfig(BaseModel):
 
 class CompanionConfig(BaseModel):
     name: str = "Капри"
-    user_name: str = "D"
+    user_name: str = "User"
     style: str = "edgerunner"
     mode: str = "normal"  # "normal", "focus", "quiet", "playful"
     proactive_enabled: bool = True

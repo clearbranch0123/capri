@@ -264,7 +264,7 @@ class MCPStdioClient:
                 {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "capri-ai-companion", "version": "3.1.0"},
+                    "clientInfo": {"name": "capri-ai-companion", "version": __import__("capri").__version__},
                 },
                 cancel_event=cancel_event,
             )

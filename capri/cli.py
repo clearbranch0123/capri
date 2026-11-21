@@ -243,7 +243,7 @@ async def main():
             except Exception:
                 break
 
-    user_name = getattr(config.companion, "user_name", "D") or "D"
+    user_name = getattr(config.companion, "user_name", "User") or "User"
     prompt_str = f"[bold magenta]{user_name}[/bold magenta] [dim]>[/dim] "
 
     stdin_task = asyncio.create_task(stdin_worker())
@@ -366,11 +366,40 @@ async def main():
 
                 elif cmd == "/memory":
                     sub = cmd_parts[1].lower() if len(cmd_parts) > 1 else ""
-                    if sub == "add" and len(cmd_parts) > 3:
+                    if sub in ("pending", "candidates", "queue"):
+                        pending = agent.memory_store.list_pending()
+                        if not pending:
+                            console.print("[dim]Очередь кандидатов памяти пуста.[/dim]")
+                        else:
+                            console.print(f"[bold cyan]Кандидаты памяти на подтверждение ({len(pending)}):[/bold cyan]")
+                            for cand in pending:
+                                ret_lbl = "временно 72ч" if cand.retention == "ephemeral" else "постоянно"
+                                quote_part = f" [dim](«{cand.source_quote}»)[/dim]" if cand.source_quote else ""
+                                console.print(f"  [cyan]{cand.id}[/cyan] [{cand.key}] ({ret_lbl}): {cand.fact}{quote_part}")
+                            console.print("[dim]Подтвердить: /memory approve <id> · Отклонить: /memory reject <id|all>[/dim]")
+                    elif sub in ("approve", "accept", "confirm") and len(cmd_parts) > 2:
+                        entry = agent.memory_store.approve_candidate(cmd_parts[2])
+                        if entry is not None:
+                            console.print(f"[green]Подтверждено и сохранено: [{entry.key}] -> '{entry.fact}'[/green]")
+                        else:
+                            console.print(f"[yellow]Кандидат [{cmd_parts[2]}] не найден. Проверь /memory pending.[/yellow]")
+                    elif sub in ("reject", "dismiss", "decline") and len(cmd_parts) > 2:
+                        if cmd_parts[2].lower() == "all":
+                            cnt = agent.memory_store.clear_pending()
+                            console.print(f"[yellow]Отклонены все кандидаты памяти ({cnt}).[/yellow]")
+                        elif agent.memory_store.reject_candidate(cmd_parts[2]):
+                            console.print(f"[yellow]Кандидат [{cmd_parts[2]}] отклонён.[/yellow]")
+                        else:
+                            console.print(f"[yellow]Кандидат [{cmd_parts[2]}] не найден.[/yellow]")
+                    elif sub == "add" and len(cmd_parts) > 3:
+                        from .core.memory import memory_payload_contains_secret
                         key = cmd_parts[2]
                         fact = " ".join(cmd_parts[3:])
-                        add_memory(key, fact)
-                        console.print(f"[green]Запомнила: [{key}] -> '{fact}'[/green]")
+                        if memory_payload_contains_secret(key, fact):
+                            console.print("[red]Отклонено: пароли, API-ключи, токены и другие секреты не сохраняются в память.[/red]")
+                        else:
+                            add_memory(key, fact)
+                            console.print(f"[green]Запомнила: [{key}] -> '{fact}'[/green]")
                     elif sub == "clear":
                         clear_all_memories()
                         agent.emotions.clear_events()
@@ -383,7 +412,8 @@ async def main():
                         console.print("[yellow]✓ Полный сброс памяти и эмоционального статуса Капри к исходному состоянию.[/yellow]")
                     else:
                         mem_data = load_memories()
-                        if not mem_data and not agent.emotions.recent_events:
+                        pending = agent.memory_store.list_pending()
+                        if not mem_data and not pending and not agent.emotions.recent_events:
                             console.print("[yellow]Память пуста. Добавь факт: /memory add <ключ> <текст>[/yellow]")
                         else:
                             if mem_data:
@@ -392,13 +422,20 @@ async def main():
                                 tbl.add_column("Факт / Заметка", style="white")
                                 tbl.add_column("Обновлено", style="dim")
                                 for k, v in mem_data.items():
-                                    tbl.add_row(k, v.get("fact", ""), v.get("updated_at", ""))
+                                    tbl.add_row(k, v.get("fact", ""), str(v.get("updated_at", "")))
                                 console.print(tbl)
+                            if pending:
+                                console.print(f"\n[bold yellow]Ожидают подтверждения ({len(pending)}):[/bold yellow]")
+                                for cand in pending:
+                                    console.print(f"  [cyan]{cand.id}[/cyan] [{cand.key}]: {cand.fact}")
                             if agent.emotions.recent_events:
                                 console.print("\n[dim magenta]Недавний эмоциональный контекст отношений (~/.config/capri/emotion.json):[/dim magenta]")
                                 for ev in agent.emotions.recent_events:
                                     console.print(f"  [dim cyan]•[/dim cyan] {ev}")
-                            console.print("\n[dim]Управление: /memory add <ключ> <текст>, /forget <ключ>, /memory clear, /clear[/dim]")
+                            console.print(
+                                "\n[dim]Управление: /memory add <ключ> <текст>, /memory pending, "
+                                "/memory approve <id>, /memory reject <id>, /forget <ключ>, /memory clear[/dim]"
+                            )
                     console.print(prompt_str, end="")
                     sys.stdout.flush()
                     continue
@@ -475,7 +512,8 @@ async def main():
                         agent.emotions.save()
                         console.print("[green]Шкала эмоций и отношений сброшена до стандартного состояния.[/green]")
                     else:
-                        console.print(Panel(agent.emotions.get_status_card(), title="[bold magenta]НЕВИДИМАЯ ШКАЛА ЭМОЦИЙ И ОТНОШЕНИЙ[/bold magenta]", border_style="magenta"))
+                        u_name = (getattr(config.companion, "user_name", "") or "").strip() or "User"
+                        console.print(Panel(agent.emotions.get_status_card(user_name=u_name), title="[bold magenta]НЕВИДИМАЯ ШКАЛА ЭМОЦИЙ И ОТНОШЕНИЙ[/bold magenta]", border_style="magenta"))
                     console.print(prompt_str, end="")
                     sys.stdout.flush()
                     continue
@@ -672,7 +710,7 @@ async def main():
                     console.print(Panel(
                         "[bold red]⚠️  ПРОТОКОЛ ПЕРЕЗАГРУЗКИ RELIC 2.0[/bold red]\n\n"
                         "[bold white]Хочешь сбросить меня?[/bold white]\n"
-                        "[italic cyan]«Думаешь, я так просто забуду все твои грешки, D?»[/italic cyan]\n\n"
+                        f"[italic cyan]«Думаешь, я так просто забуду все твои грешки, {user_name}?»[/italic cyan]\n\n"
                         "[dim]Сброс обнулит раздражение (0%), вернет доверие к базовым +25% и сотрет историю обид.[/dim]",
                         border_style="red"
                     ))
@@ -867,6 +905,15 @@ async def main():
                     final_text = event.data
                     console.print()
                     console.print(Markdown(event.data))
+                elif event.type == "memory_candidates":
+                    cands = event.metadata.get("candidates") or []
+                    for c in cands:
+                        ret_lbl = "временно 72ч" if c.get("retention") == "ephemeral" else "постоянно"
+                        console.print(
+                            f"  [bold yellow]🧠 Предложение памяти ({ret_lbl}):[/bold yellow] "
+                            f"[cyan]{c.get('id')}[/cyan] [{c.get('key')}]: {c.get('fact')} "
+                            f"[dim](/memory approve {c.get('id')} | /memory reject {c.get('id')})[/dim]"
+                        )
                 elif event.type == "error":
                     notify_avatar("idle")
                     console.print(f"[bold red]ОШИБКА:[/bold red] {event.data}")

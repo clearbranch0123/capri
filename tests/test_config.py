@@ -8,7 +8,7 @@ def test_load_config(tmp_path):
     # Isolated default config check — never depends on personal local config.yaml
     config = load_config(tmp_path / "nonexistent_config.yaml")
     assert config.companion.name == "Капри"
-    assert config.companion.user_name == "D"
+    assert config.companion.user_name == "User"
     assert config.voice.wake_word_enabled is True
     assert "капри" in config.voice.wake_words
 

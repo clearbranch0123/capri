@@ -835,7 +835,7 @@ class SessionManager:
             else:
                 # Фоллбэк: если model_messages_json был пуст
                 is_pro = getattr(t, "status", "") == "proactive" or (t.user_text or "").strip().startswith("[INITIATIVE //")
-                u_content = "(Тишина в эфире — проактивное обращение Капри к D)" if is_pro else t.user_text
+                u_content = "(Тишина в эфире — проактивное обращение Капри к пользователю)" if is_pro else t.user_text
                 history.append({"role": "user", "content": u_content})
                 if t.assistant_text:
                     history.append({"role": "assistant", "content": t.assistant_text})
@@ -855,7 +855,7 @@ class SessionManager:
                             tool_names = ", ".join(tc.get("function", {}).get("name", "tool") for tc in m["tool_calls"])
                             m["reasoning_content"] = f"Запуск системных инструментов: {tool_names}."
                         else:
-                            m["reasoning_content"] = "Анализ контекста диалога и формулирование ответа D."
+                            m["reasoning_content"] = "Анализ контекста диалога и формулирование ответа пользователю."
 
         return history
 

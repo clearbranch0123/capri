@@ -12,7 +12,7 @@ llm:
   api_key: ''
   base_url: https://api.deepseek.com
   frequency_penalty: 0.6
-  max_tokens: 1024
+  max_tokens: 2048
   model: deepseek-flash
   presence_penalty: 0.5
   provider: deepseek

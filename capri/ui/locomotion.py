@@ -399,7 +399,7 @@ class LocomotionController(QObject):
         self.come_quotes = [
             "Чего хотел?",
             "Уже здесь, шеф. Чо стряслось?",
-            "Телепортация завершена. Внимаю, D.",
+            "Телепортация завершена. Внимаю.",
             "Приползла. Выкладывай, шеф.",
             "Я рядом. Не теряй меня из виду.",
             "Кибер-конструкт прибыл по координатам.",
@@ -515,7 +515,7 @@ class LocomotionController(QObject):
         """«Капри, стой тут» / /stay: фиксация на месте, отключение следования."""
         self.mode = LocomotionMode.STAY
         self.anchor_coords = self.get_current_coords()
-        msg = "Остаюсь тут. Свистнешь, если понадоблюсь, D."
+        msg = "Остаюсь тут. Свистнешь, если понадоблюсь."
         self.caption_requested.emit(msg)
         return True, "Stay mode active"
 

@@ -244,9 +244,11 @@ class InitiativeEngine:
         stage: str = "trusted_partner",
         mood: str = "neutral",
         details: Optional[Dict[str, Any]] = None,
+        user_name: str = "User",
     ) -> str:
         """Генерирует киберпанковую реплику в стиле Capri с учетом стадии отношений и настроения."""
         details = details or {}
+        u_name = (user_name or "").strip() or "User"
         raw_item = str(details.get("item", "")).strip()
         item_text = (raw_item[:70] + "...") if len(raw_item) > 70 else raw_item
         proposal = str(details.get("proposal", "")).strip()
@@ -255,82 +257,82 @@ class InitiativeEngine:
             if details.get("is_step"):
                 if stage == "cautious_ally":
                     phrases = [
-                        f"D, в рабочем контексте зафиксирован следующий шаг: «{item_text}». Берёмся за него?",
-                        f"D, по плану у нас шаг «{item_text}». Готова подключиться, когда скомандуешь.",
+                        f"{u_name}, в рабочем контексте зафиксирован следующий шаг: «{item_text}». Берёмся за него?",
+                        f"{u_name}, по плану у нас шаг «{item_text}». Готова подключиться, когда скомандуешь.",
                     ]
                 elif stage == "bonded_relic":
                     phrases = [
-                        f"D, энграмма напоминает: ты хотел сделать «{item_text}». Я на связи, давай закроем этот пункт.",
-                        f"Слушай, D. Шаг «{item_text}» сам себя не напишет. Я в боевой готовности, командуй.",
+                        f"{u_name}, энграмма напоминает: ты хотел сделать «{item_text}». Я на связи, давай закроем этот пункт.",
+                        f"Слушай, {u_name}. Шаг «{item_text}» сам себя не напишет. Я в боевой готовности, командуй.",
                     ]
                 else:  # trusted_partner
                     phrases = [
-                        f"Эй, D. Ветку не бросаем — там висит шаг «{item_text}». Развернём терминал?",
-                        f"D, у нас открыт следующий шаг: «{item_text}». Дропнем код или сделаем перерыв?",
+                        f"Эй, {u_name}. Ветку не бросаем — там висит шаг «{item_text}». Развернём терминал?",
+                        f"{u_name}, у нас открыт следующий шаг: «{item_text}». Продолжим или сделаем перерыв?",
                     ]
             else:  # is_thread
                 if stage == "cautious_ally":
                     phrases = [
-                        f"D, задача «{item_text}» всё ещё активна. Нужна помощь по коду или логам?",
+                        f"{u_name}, задача «{item_text}» всё ещё активна. Нужна помощь по коду или логам?",
                         f"Напоминаю об открытой задаче «{item_text}». Держу контекст в оперативной памяти.",
                     ]
                 elif stage == "bonded_relic":
                     phrases = [
-                        f"D, конструкт держит фокус на задаче «{item_text}». Не откладывай на потом, добьём вместе.",
+                        f"{u_name}, держу фокус на задаче «{item_text}». Не откладывай на потом, добьём вместе.",
                         f"Эй, напарник. «{item_text}» в активном пуле. Синхронизируем действия?",
                     ]
                 else:  # trusted_partner
                     phrases = [
-                        f"Слушай, D. Мы остановились на задаче «{item_text}». Продолжим взлом или переключим фокус?",
-                        f"D, задача «{item_text}» ждёт нас. Всё готово к следующему раунду.",
+                        f"Слушай, {u_name}. Мы остановились на задаче «{item_text}». Продолжим или переключим фокус?",
+                        f"{u_name}, задача «{item_text}» ждёт нас. Всё готово к следующему раунду.",
                     ]
             return random.choice(phrases)
 
         if kind == "focus_break":
             if stage == "cautious_ally":
                 phrases = [
-                    "D, сессия длится уже более двух с половиной часов. Рекомендую сделать короткий перерыв.",
+                    f"{u_name}, сессия длится уже более двух с половиной часов. Рекомендую сделать короткий перерыв.",
                 ]
             elif stage == "bonded_relic":
                 phrases = [
-                    "Эй, нетраннер. Ты непрерывно в деке уже почти три часа. Сделай паузу, выпей воды. Реальный мир тоже требует подзарядки.",
-                    "D, биочип сигнализирует о перегрузке внимания. 2.5 часа без пауз — это перебор даже для киборга. Пять минут отдыха.",
+                    "Эй, напарник. Ты непрерывно в терминале уже почти три часа. Сделай паузу, выпей воды — реальный мир тоже требует подзарядки.",
+                    f"{u_name}, 2.5 часа без пауз — это перебор даже для нетраннера. Пять минут отдыха.",
                 ]
             else:  # trusted_partner
                 phrases = [
-                    "D, ты уже 2.5 часа без перерыва в консоли. Глаза и мозг перегреются. Отойди от экрана на пять минут.",
-                    "Слушай, D. Ты непрерывно шпаришь уже два с половиной часа. Сделай паузу, завари кофе или сделай разминку — дек никуда не денется.",
+                    f"{u_name}, ты уже 2.5 часа без перерыва в консоли. Глаза и мозг перегреются. Отойди от экрана на пять минут.",
+                    f"Слушай, {u_name}. Ты непрерывно работаешь уже два с половиной часа. Сделай паузу, завари кофе или разомнись — дек никуда не денется.",
                 ]
             return random.choice(phrases)
 
         if kind == "idle_checkin":
             current_hour = time.localtime().tm_hour
             if 0 <= current_hour < 6:
-                return "D, время глубоко за полночь. Ты ещё в терминале? Не забывай про сон, конструкт никуда не убежит."
+                return f"{u_name}, время глубоко за полночь. Ты ещё в терминале? Не забывай про сон, я никуда не убегу."
 
             if stage == "cautious_ally":
                 phrases = [
                     "В терминале тихо. Если отошёл — я на дежурстве, системные потоки в норме.",
-                    "Канал связи открыт. Если возникнут вопросы — я здесь, D.",
+                    f"Канал связи открыт. Если возникнут вопросы — я здесь, {u_name}.",
                 ]
             elif stage == "bonded_relic":
                 phrases = [
-                    "Дек тихо шуршит в фоне. D, ты тут или в астрале? Я на связи, биочип наготове.",
-                    "Тихий эфир. Приятно посидеть в тишине между штормами, но если что-то нужно — свистни, D.",
+                    f"Дек тихо шуршит в фоне. {u_name}, ты тут или в астрале? Я на связи.",
+                    f"Тихий эфир. Приятно посидеть в тишине между штормами, но если что-то нужно — свистни, {u_name}.",
                 ]
             else:  # trusted_partner
                 phrases = [
-                    "В терминале тишина. Всё под контролем или застрял на какой-то баге, D?",
-                    "Эй, D, ты на связи? Если отошёл размяться — одобряю, если залип — подай знак.",
+                    f"В терминале тишина. Всё под контролем или застрял на какой-то баге, {u_name}?",
+                    f"Эй, {u_name}, ты на связи? Если отошёл размяться — одобряю, если залип — подай знак.",
                 ]
             return random.choice(phrases)
 
         if kind == "action_proposal":
             if proposal:
-                return f"D, есть мысль по дальнейшим действиям: {proposal}. Что скажешь?"
-            return "D, у меня есть пара предложений по оптимизации рабочего процесса. Обсудим?"
+                return f"{u_name}, есть мысль по дальнейшим действиям: {proposal}. Что скажешь?"
+            return f"{u_name}, у меня есть пара предложений по оптимизации рабочего процесса. Обсудим?"
 
-        return "D, конструкт на связи. Готова продолжать работу."
+        return f"{u_name}, конструкт на связи. Готова продолжать работу."
 
     def _commit_initiative(
         self,
@@ -362,6 +364,7 @@ class InitiativeEngine:
         emotions: Optional[Any] = None,
         now: Optional[float] = None,
         game_mode_active: bool = False,
+        user_name: str = "User",
     ) -> Optional[InitiativeRecord]:
         """
         Проверяет условия и при наличии повода возвращает сгенерированное проактивное действие.
@@ -386,7 +389,7 @@ class InitiativeEngine:
             kind = "action_proposal"
             content = prop.get("suggestion", "")
             context_ref = prop.get("context_ref")
-            phrase = self.generate_phrase(kind, stage, mood, {"proposal": content})
+            phrase = self.generate_phrase(kind, stage, mood, {"proposal": content}, user_name=user_name)
             return self._commit_initiative(kind, phrase, context_ref=context_ref, now=ts)
 
         # 2. Непрерывная сессия > 2.5 часов (focus_break)
@@ -394,7 +397,7 @@ class InitiativeEngine:
         last_break = [r for r in self.history if r.kind == "focus_break"]
         last_break_time = last_break[-1].timestamp if last_break else 0.0
         if session_duration >= 9000 and (ts - last_break_time >= 7200):
-            phrase = self.generate_phrase("focus_break", stage, mood)
+            phrase = self.generate_phrase("focus_break", stage, mood, user_name=user_name)
             return self._commit_initiative("focus_break", phrase, now=ts)
 
         # 3. Активные задачи из Context Continuity (task_nudge)
@@ -403,18 +406,18 @@ class InitiativeEngine:
             if steps:
                 chosen_step = steps[-1]
                 details = {"is_step": True, "item": chosen_step.content}
-                phrase = self.generate_phrase("task_nudge", stage, mood, details)
+                phrase = self.generate_phrase("task_nudge", stage, mood, details, user_name=user_name)
                 return self._commit_initiative("task_nudge", phrase, context_ref=chosen_step.id, now=ts)
 
             threads = context_store.get_active_items(kind="thread")
             if threads:
                 chosen_thread = threads[-1]
                 details = {"is_thread": True, "item": chosen_thread.content}
-                phrase = self.generate_phrase("task_nudge", stage, mood, details)
+                phrase = self.generate_phrase("task_nudge", stage, mood, details, user_name=user_name)
                 return self._commit_initiative("task_nudge", phrase, context_ref=chosen_thread.id, now=ts)
 
         # 4. Простой в диалоге (idle_checkin)
-        phrase = self.generate_phrase("idle_checkin", stage, mood)
+        phrase = self.generate_phrase("idle_checkin", stage, mood, user_name=user_name)
         return self._commit_initiative("idle_checkin", phrase, now=ts)
 
     def force_trigger(
@@ -423,6 +426,7 @@ class InitiativeEngine:
         emotions: Optional[Any] = None,
         kind: Optional[str] = None,
         now: Optional[float] = None,
+        user_name: str = "User",
     ) -> InitiativeRecord:
         """Принудительно генерирует инициативу в обход кулдауна (для ручного вызова или тестов)."""
         self._sync_disk()
@@ -456,7 +460,7 @@ class InitiativeEngine:
         if not target_kind:
             target_kind = "idle_checkin"
 
-        phrase = self.generate_phrase(target_kind, stage, mood, details)
+        phrase = self.generate_phrase(target_kind, stage, mood, details, user_name=user_name)
         return self._commit_initiative(target_kind, phrase, context_ref=context_ref, now=ts)
 
     def set_enabled(self, enabled: bool):
@@ -478,21 +482,23 @@ class InitiativeEngine:
         self.settings.cooldown_seconds = max(60, int(cooldown_minutes) * 60)
         self.save()
 
-    def get_prompt_context(self) -> str:
+    def get_prompt_context(self, user_name: str = "User") -> str:
         """Компактная пометка для системного промпта модели о наличии инициативы."""
         if not self.settings.enabled:
             return ""
+        u_name = (user_name or "").strip() or "User"
         return (
             "\n---\n"
             "[АВТОНОМНЫЙ ДВИЖОК ИНИЦИАТИВЫ (INITIATIVE ENGINE)]:\n"
             f"Статус: АКТИВЕН (уровень: {self.settings.level}, кулдаун: {self.get_effective_cooldown() // 60} мин).\n"
-            "Капри обладает собственной инициативой. Ты можешь проактивно предлагать D следующие шаги, напоминать о задачах и использовать инструмент propose_action при формировании планов.\n"
+            f"Капри обладает собственной инициативой. Ты можешь проактивно предлагать {u_name} следующие шаги, напоминать о задачах и использовать инструмент propose_action при формировании планов.\n"
             "---\n"
         )
 
-    def get_status_card(self, companion_mode: str = "normal", stage: str = "trusted_partner") -> str:
+    def get_status_card(self, companion_mode: str = "normal", stage: str = "trusted_partner", user_name: str = "User") -> str:
         """Форматированная карточка для команды /initiative в Cyberdeck."""
         self._sync_disk()
+        u_name = (user_name or "").strip() or "User"
         can, reason = self.can_trigger(companion_mode=companion_mode, relationship_stage=stage)
         eff_cd = self.get_effective_cooldown()
         eff_idle = self.get_effective_idle_threshold()
@@ -507,7 +513,7 @@ class InitiativeEngine:
             f"  Текущий режим:        [{companion_mode.upper()}] (стадия связи: [{stage}])",
             f"  Готовность триггера:  {'ГОТОВ К ДЕЙСТВИЮ' if can else f'ОЖИДАНИЕ ({reason})'}",
             f"  Кулдаун остаток:      {cd_left} сек",
-            f"  Время с реплики D:    {int(time_since_user)} сек",
+            f"  Время с реплики {u_name}: {int(time_since_user)} сек",
             f"  Всего инициатив:      {len(self.history)}",
         ]
         if self.history:

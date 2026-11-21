@@ -64,31 +64,69 @@ from .theme import (
 )
 
 
-_CODE_FENCE_RE = re.compile(r"```([A-Za-z0-9_+\-#.]*)\n(.*?)```", re.DOTALL)
+_FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([A-Za-z0-9_+\-#.]*)[ \t]*$")
 
 
 def split_markdown_blocks(text: str) -> list[tuple[str, str, str]]:
     """
-    Split markdown text into ordered segments:
+    Split markdown text into ordered segments using CommonMark line-anchored fences:
     ('text', '', chunk) and ('code', lang, code_body).
+    Inline triple backticks inside code/ASCII art (e.g. `:-:::=**+-```--::.`) NEVER
+    prematurely close an open fenced code block.
     Returns a single ('text', '', text) when no fenced blocks exist.
     """
-    if not text or "```" not in text:
+    if not text or ("```" not in text and "~~~" not in text):
         return [("text", "", text or "")]
+
     segments: list[tuple[str, str, str]] = []
-    pos = 0
-    for match in _CODE_FENCE_RE.finditer(text):
-        start, end = match.span()
-        before = text[pos:start].strip()
-        if before:
-            segments.append(("text", "", before))
-        lang = (match.group(1) or "").strip().lower()
-        code = match.group(2).rstrip("\n")
-        segments.append(("code", lang, code))
-        pos = end
-    tail = text[pos:].strip()
-    if tail:
-        segments.append(("text", "", tail))
+    text_lines: list[str] = []
+    code_lines: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_lang = ""
+
+    def _flush_text():
+        if text_lines:
+            chunk = "\n".join(text_lines).strip()
+            if chunk:
+                segments.append(("text", "", chunk))
+            text_lines.clear()
+
+    for line in text.splitlines():
+        if not in_fence:
+            m_open = _FENCE_OPEN_RE.match(line)
+            if m_open:
+                _flush_text()
+                marker = m_open.group(1)
+                fence_char = marker[0]
+                fence_len = len(marker)
+                fence_lang = (m_open.group(2) or "").strip().lower()
+                code_lines = []
+                in_fence = True
+                continue
+            text_lines.append(line)
+        else:
+            stripped = line.strip()
+            if (
+                len(stripped) >= fence_len
+                and set(stripped) == {fence_char}
+                and len(line) - len(line.lstrip(" \t")) <= 3
+            ):
+                segments.append(("code", fence_lang, "\n".join(code_lines).rstrip("\n")))
+                code_lines = []
+                in_fence = False
+                fence_char = ""
+                fence_len = 0
+                fence_lang = ""
+                continue
+            code_lines.append(line)
+
+    if in_fence:
+        segments.append(("code", fence_lang, "\n".join(code_lines).rstrip("\n")))
+    else:
+        _flush_text()
+
     return segments or [("text", "", text)]
 
 
@@ -371,9 +409,9 @@ class SegmentedEngramBar(QWidget):
 class UserMonogramBadge(QWidget):
     """Compact circular Cyan-accented user monogram badge for right-aligned user messages."""
 
-    def __init__(self, letter: str = "D", size: int = 20, parent: Optional[QWidget] = None):
+    def __init__(self, letter: str = "U", size: int = 20, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._letter = (letter or "D").strip()[:1].upper() or "D"
+        self._letter = (letter or "User").strip()[:1].upper() or "U"
         self._size = size
         self.setFixedSize(size, size)
 
@@ -1085,7 +1123,7 @@ class WelcomeCanvas(QWidget):
         self.signal_mark = CapriSignalMark(size=46, avatar_enabled=avatar_enabled, parent=center)
         cl.addWidget(self.signal_mark, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.lbl_greeting = QLabel(greeting or "На связи, D. С чего начнём?")
+        self.lbl_greeting = QLabel(greeting or "На связи. С чего начнём?")
         self.lbl_greeting.setWordWrap(True)
         self.lbl_greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_greeting.setStyleSheet(f"""
@@ -1122,7 +1160,7 @@ class WelcomeCanvas(QWidget):
         self._suggestions = [
             ("vision", "eye", "Посмотреть на экран", "Vision-анализ активного окна"),
             ("status", "activity", "Статус системы", f"CPU, GPU, память и {comp_short}"),
-            ("memory", "memory", "Банк памяти", "Просмотр и правка фактов о D"),
+            ("memory", "memory", "Банк памяти", "Просмотр и правка сохранённых фактов"),
             ("context", "layers", "Рабочий контекст", "Текущие задачи и решения"),
         ]
         self.suggestion_buttons: list[QPushButton] = []
@@ -1162,11 +1200,11 @@ class WelcomeCanvas(QWidget):
         cl.addWidget(self.suggestions_box)
         outer.addWidget(center, alignment=Qt.AlignmentFlag.AlignCenter)
 
-    def update_state(self, greeting: str, subtitle: str, avatar_enabled: bool, user_name: str = "D") -> None:
+    def update_state(self, greeting: str, subtitle: str, avatar_enabled: bool, user_name: str = "User") -> None:
         self.lbl_greeting.setText(greeting)
         self.lbl_subtitle.setText(subtitle)
         self.signal_mark.set_avatar_enabled(avatar_enabled)
-        u = (user_name or "D").strip() or "D"
+        u = (user_name or "User").strip() or "User"
         for btn in self.suggestion_buttons:
             if btn.objectName() == "welcomeSuggestion_memory":
                 btn.setText(f"Банк памяти\nПросмотр и правка фактов о {u}")

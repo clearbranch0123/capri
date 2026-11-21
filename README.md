@@ -1,7 +1,7 @@
-# ⚡ CAPRI // Cyberpunk AI Companion for Linux (Open Beta)
+# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.2 — Soul & Canon)
 
-[![Version](https://img.shields.io/badge/version-v3.1.0--beta.2-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.1.0-beta.2)
-[![Tests](https://img.shields.io/badge/Tests-200%2F200%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Version](https://img.shields.io/badge/version-v3.2.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.2.0)
+[![Tests](https://img.shields.io/badge/Tests-219%2F219%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20Wayland-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
@@ -9,13 +9,13 @@
 
 > **Примечание о лицензии:** лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
-Десктопный ИИ-компаньон под Linux с характером киберпанк-нетраннера (Project Capricorn) и единой дизайн-системой **Crimson Graphite (v3.1)**. Приложение, история диалогов, память и ключи хранятся полностью локально на вашем ПК, а нейроядро (LLM) подключается через выбранного API-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или любой локальный OpenAI-совместимый сервер (например, Ollama / LM Studio).
+Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*, `v3.2`) и единой дизайн-системой **Crimson Graphite**. Приложение, история диалогов, память и ключи хранятся полностью локально на вашем ПК, а нейроядро (LLM) подключается через выбранного API-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или любой локальный OpenAI-совместимый сервер (например, Ollama / LM Studio).
 
-Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), долговременную память **Memory Workbench**, эмоциональный движок и опциональный desktop-аватар.
+Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), управляемую память через кандидатов с фильтрацией секретов и TTL (`Memory Workbench`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), эмоциональный движок, синтетический харнесс оценки характера (`scripts/eval_persona.py`) и опциональный desktop-аватар.
 
 ---
 
-## 🖼️ Интерфейс Capri 3.1 (Crimson Graphite)
+## 🖼️ Интерфейс Capri (Crimson Graphite)
 
 ### Cyberdeck
 ![Capri Cyberdeck v3.1](docs/screenshots/cyberdeck.png)
@@ -65,7 +65,8 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./run.sh --gui         # Cyberdeck GUI
 ./run.sh --doctor      # Самодиагностика окружения
 ./run.sh --bugreport   # Безопасный баг-репорт (без ключей и переписки)
-./run.sh --test        # Полный прогон автотестов (v3.1.0: 200/200 passed)
+./run.sh --test        # Полный прогон автотестов (v3.2.0: 219/219 passed)
+./.venv/bin/python scripts/eval_persona.py --mock --providers deepseek,gemini  # Синтетический тест характера (оффлайн)
 ```
 
 ### 4. Безопасное обновление (`--upgrade`) и удаление (`--uninstall`)
@@ -92,8 +93,8 @@ git pull
 | Режим | Что разрешено автоматически | Что требует подтверждения / заблокировано |
 |---|---|---|
 | **`SAFE`** | Только явные read-only инструменты (кроме `.env`, `~/.ssh`, `~/.gnupg`, `~/.config/capri`, `/etc/shadow`) и read-only allowlist команд shell (без пайпов, редиректов, glob `*`/`?`, `$VAR` и опасных флагов `git -c`) | **Заблокированы** любые мутации ОС, запись файлов, память/состояние Capri и все внешние `mcp__*` инструменты |
-| **`ASK`** *(по умолчанию)* | Read-only инструменты и внутреннее состояние компаньона (память, контекст, таймеры, аватар) | **Требуют подтверждения** (`CapriToolApprovalDialog` / `y/N`): shell вне allowlist, `write_file`, `kill_process`, чтение чувствительных файлов/симлинков, действия ОС и **все** `mcp__*` инструменты |
-| **`TRUSTED`** | Всё из `ASK` + неразрушающее управление десктопом (`focus_window`, `media_control`, `set_volume`) | **Всё равно требуют подтверждения**: shell вне allowlist, `write_file`, `kill_process`, доступ к чувствительным путям и все `mcp__*` инструменты |
+| **`ASK`** *(по умолчанию)* | Read-only инструменты и служебное состояние компаньона (контекст, таймеры, аватар) | **Требуют подтверждения** (`CapriToolApprovalDialog` / `y/N`): прямые изменения памяти (`remember`, `update_memory_entry`, `forget_memory`), shell вне allowlist, `write_file`, `kill_process`, чтение чувствительных файлов/симлинков, действия ОС и **все** `mcp__*` инструменты |
+| **`TRUSTED`** | Всё из `ASK` + неразрушающее управление десктопом (`focus_window`, `media_control`, `set_volume`) | **Всё равно требуют подтверждения**: прямые изменения памяти, shell вне allowlist, `write_file`, `kill_process`, доступ к чувствительным путям и все `mcp__*` инструменты |
 
 Разрушающие паттерны (`rm -rf /`, `mkfs`, `dd of=/dev/...`, `curl | sh`, `shutdown`, форк-бомбы) **заблокированы всегда** во всех режимах. Переключение: `/policy safe | ask | trusted` или через окно настроек.
 
@@ -103,7 +104,7 @@ git pull
 
 - **Горячие клавиши:** `Enter` (отправить), `Shift+Enter` (новая строка), `Ctrl+N` (новый чат), `Ctrl+K` (поиск диалогов), `Ctrl+V` (скриншот/текст), `Ctrl+M` (голос), `Esc` (стоп / закрыть drawer), `F2` / `Del` (переименовать / удалить сессию).
 - **Диагностика и резервные копии:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/profile export`, `/profile restore <zip>`.
-- **Память и контекст:** `/new`, `/sessions`, `/memory` (`/workbench`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
+- **Память и контекст:** `/new`, `/sessions`, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
 - **Интеграции v3.x:** `/mcp [status|connect|disconnect|tools]` *(асинхронное неблокирующее подключение)*, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
 
 ---

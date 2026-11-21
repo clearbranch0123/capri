@@ -175,7 +175,7 @@ class CapriRelicDashboard(QWidget):
         self.bar_sync.setFixedHeight(8)
         hc_lay.addWidget(self.bar_sync)
 
-        user_name = getattr(getattr(self.config, "companion", None), "user_name", "D") or "D"
+        user_name = getattr(getattr(self.config, "companion", None), "user_name", "User") or "User"
         self.lbl_quote = QLabel(f"«На связи, {user_name}. Энграмма синхронизирована и развёрнута в системе.»")
         self.lbl_quote.setWordWrap(True)
         self.lbl_quote.setStyleSheet(

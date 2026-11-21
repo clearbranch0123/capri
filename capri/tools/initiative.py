@@ -28,7 +28,7 @@ async def get_initiative_status() -> str:
     return card
 
 
-@tool(description="Зафиксировать проактивное предложение или рекомендацию для D (будет озвучено или предложено в диалоге). kind: тип ('task_nudge', 'focus_break', 'action_proposal'). suggestion: текст идеи/предложения. context_ref: опциональный ID связанной задачи.")
+@tool(description="Зафиксировать проактивное предложение или рекомендацию для пользователя (будет озвучено или предложено в диалоге). kind: тип ('task_nudge', 'focus_break', 'action_proposal'). suggestion: текст идеи/предложения. context_ref: опциональный ID связанной задачи.")
 async def propose_action(kind: str, suggestion: str, context_ref: Optional[str] = None) -> str:
     engine = get_initiative_engine()
     clean_kind = kind.lower().strip() if kind else "action_proposal"

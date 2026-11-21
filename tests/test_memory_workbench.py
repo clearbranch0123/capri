@@ -149,8 +149,8 @@ def test_bounded_prompt_context(clean_memory_store):
     store.add_or_update(long_key, "Факт со сверхдлинным ключом", category="projects", importance=3)
 
     prompt = store.get_prompt_context()
-    assert "ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ О D" in prompt
-    assert "Личность D" in prompt
+    assert "ДОЛГОВРЕМЕННАЯ ПАМЯТЬ — СОХРАНЁННЫЕ ФАКТЫ (User)" in prompt
+    assert "Личность пользователя" in prompt
     assert "• [user_id]: D" in prompt
     assert "Окружение / Софт" in prompt
     # Длинный факт должен быть обрезан с троеточием
