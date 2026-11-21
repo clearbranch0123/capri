@@ -1,10 +1,13 @@
 # ⚡ CAPRI // Cyberpunk AI Companion for Linux (Open Beta)
 
-[![Version](https://img.shields.io/badge/version-v3.1.0%20(Open%20Beta)-e12d53.svg?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v3.1.0--beta.2-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.1.0-beta.2)
 [![Tests](https://img.shields.io/badge/Tests-200%2F200%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20Wayland-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
-[![License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
+[![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
+[![Assets Notice](https://img.shields.io/badge/Assets-Noncommercial-e8ad52.svg?style=for-the-badge)](ASSETS_NOTICE.md)
+
+> **Примечание о лицензии:** лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
 Десктопный ИИ-компаньон под Linux с характером киберпанк-нетраннера (Project Capricorn) и единой дизайн-системой **Crimson Graphite (v3.1)**. Приложение, история диалогов, память и ключи хранятся полностью локально на вашем ПК, а нейроядро (LLM) подключается через выбранного API-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или любой локальный OpenAI-совместимый сервер (например, Ollama / LM Studio).
 
