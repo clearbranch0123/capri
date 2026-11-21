@@ -86,7 +86,11 @@ WHEEL_SRC="${STAGE_DIR}/capri-${VERSION}"
 if command -v uv >/dev/null 2>&1; then
     uv build --wheel --out-dir "$DIST_DIR" "$WHEEL_SRC" >/dev/null
 elif "$PYTHON_BIN" -m build --version >/dev/null 2>&1; then
-    "$PYTHON_BIN" -m build --wheel --no-isolation --outdir "$DIST_DIR" "$WHEEL_SRC" >/dev/null
+    if "$PYTHON_BIN" -c "import setuptools" >/dev/null 2>&1; then
+        "$PYTHON_BIN" -m build --wheel --no-isolation --outdir "$DIST_DIR" "$WHEEL_SRC" >/dev/null
+    else
+        "$PYTHON_BIN" -m build --wheel --outdir "$DIST_DIR" "$WHEEL_SRC" >/dev/null
+    fi
 elif "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     "$PYTHON_BIN" -m pip wheel --no-deps --no-build-isolation --wheel-dir "$DIST_DIR" "$WHEEL_SRC" >/dev/null
 else
