@@ -8,7 +8,13 @@ import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except Exception as _sd_exc:  # PortAudio/PulseAudio may be unavailable on headless Linux
+    sd = None  # type: ignore[assignment]
+    _SOUNDDEVICE_IMPORT_ERROR: Optional[Exception] = _sd_exc
+else:
+    _SOUNDDEVICE_IMPORT_ERROR = None
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -25,7 +31,7 @@ class PushToTalkRecorder:
         self.input_device = (input_device or "").strip()
         self.frames: list[np.ndarray] = []
         self.is_recording = False
-        self.stream: Optional[sd.InputStream] = None
+        self.stream = None
 
     def _resolved_device(self) -> Optional[int]:
         if not self.input_device:
@@ -37,6 +43,8 @@ class PushToTalkRecorder:
             return None
 
     def start(self):
+        if sd is None:
+            raise RuntimeError(f"Микрофон недоступен (PortAudio/sounddevice): {_SOUNDDEVICE_IMPORT_ERROR}")
         if self.stream is not None:
             try:
                 self.stream.stop()
@@ -140,6 +148,8 @@ class SpeechRecognizer:
         consecutive_silence = 0
         silence_threshold = 0.008
 
+        if sd is None:
+            raise RuntimeError(f"Микрофон недоступен (PortAudio/sounddevice): {_SOUNDDEVICE_IMPORT_ERROR}")
         with sd.InputStream(**self._stream_kwargs()) as stream:
             for _ in range(max_chunks):
                 if stop_event and stop_event.is_set():
@@ -166,6 +176,8 @@ class SpeechRecognizer:
         chunk_samples = int(self.sample_rate * 0.1)
         total_chunks = max(1, int(round(duration / 0.1)))
         recorded = []
+        if sd is None:
+            raise RuntimeError(f"Микрофон недоступен (PortAudio/sounddevice): {_SOUNDDEVICE_IMPORT_ERROR}")
         with sd.InputStream(**self._stream_kwargs()) as stream:
             for _ in range(total_chunks):
                 chunk, _ = stream.read(chunk_samples)

@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import Callable, Optional, List
 
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except Exception as _sd_exc:  # PortAudio/PulseAudio may be unavailable on headless Linux
+    sd = None  # type: ignore[assignment]
+    _SOUNDDEVICE_IMPORT_ERROR: Optional[Exception] = _sd_exc
+else:
+    _SOUNDDEVICE_IMPORT_ERROR = None
 import vosk
 
 from ..ui.client import notify_avatar
@@ -256,6 +262,11 @@ class WakeWordListener:
 
     def _listen_loop(self):
         """Главный цикл захвата микрофона с VAD-фильтрацией и подтверждением ключевого слова."""
+        if sd is None:
+            logger.warning(f"Wake-Word отключён: PortAudio/sounddevice недоступен ({_SOUNDDEVICE_IMPORT_ERROR})")
+            self.running = False
+            self._stream_closed_event.set()
+            return
         block_size = 2000  # 125 мс чанки при 16 кГц для стабильной синхронизации
         # Кольцевой буфер последних 6 чанков (~750 мс), чтобы сохранять слитную речь после «Капри»
         pre_buffer = collections.deque(maxlen=6)

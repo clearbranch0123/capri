@@ -43,7 +43,10 @@ def test_stt_record_methods(monkeypatch):
         def read(self, n):
             return np.zeros((n, 1), dtype=np.float32), False
 
-    monkeypatch.setattr("sounddevice.InputStream", MockStream)
+    from types import SimpleNamespace
+    from capri.voice import stt as stt_mod
+
+    monkeypatch.setattr(stt_mod, "sd", SimpleNamespace(InputStream=MockStream))
     audio = stt.record_seconds(0.1)
     assert isinstance(audio, np.ndarray)
 

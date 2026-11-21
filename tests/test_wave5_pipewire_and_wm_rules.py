@@ -129,7 +129,11 @@ def test_pipewire_aec_enable_disable_and_device_resolution(monkeypatch):
         {"name": "FIFINE USB Microphone", "max_input_channels": 1},
         {"name": "HDMI Output Only", "max_input_channels": 0},
     ]
-    with patch("sounddevice.query_devices", return_value=fake_devs):
+    from types import SimpleNamespace
+    import sys
+
+    fake_sd = SimpleNamespace(query_devices=lambda: fake_devs)
+    with patch.dict(sys.modules, {"sounddevice": fake_sd}):
         assert resolve_sounddevice_input("") is None
         assert resolve_sounddevice_input("fifine") == 1
         assert resolve_sounddevice_input("nonexistent_mic") is None
