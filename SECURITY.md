@@ -45,3 +45,12 @@ All tool executions pass through `ToolPolicyEngine` (fail-closed by default when
 - API keys are stored locally in `~/.config/capri/.env` (or `$XDG_CONFIG_HOME/capri/.env`) with `0600` permissions and are scrubbed from `config.yaml` on save.
 - LLM-proposed memory facts are staged in an isolated `pending_memory.json` (`0600`) queue and never enter `memory.json` or system prompts without explicit user approval. A dedicated secret/credential filter blocks passwords, API keys, tokens, PINs, and private keys at proposal, edit, approval, tool, and slash-command boundaries without logging secret values.
 - `/bugreport` and runtime error surfaces redact API keys, Bearer tokens, JWTs, URL query/basic-auth credentials, MCP env secrets, and local `/home/<user>` paths, and never include `sessions.db`, `memory.json`, `pending_memory.json`, `emotion.json`, or `.env`.
+
+### 4. Cloud Provider Data Boundary
+- Persistent state (`sessions.db`, `memory.json`, `pending_memory.json`, `emotion.json`, `context.json`, and `.env`) is stored locally on disk and is never uploaded as a profile or archive.
+- When you configure cloud providers, only the payload required for each active capability is transmitted to your selected API endpoint:
+  - **Cloud LLM** (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`): system prompt, active conversation window, and user-confirmed memory facts (never unapproved `pending_memory.json` entries or `.env`).
+  - **Cloud STT** (`Groq Whisper`): recorded audio snippet for speech-to-text transcription.
+  - **Cloud TTS** (`Fish Audio`, `ElevenLabs`, `Edge`, `Gemini TTS`): assistant reply text for speech synthesis.
+  - **Cloud Vision** (`Gemini Vision`): desktop screenshot or user-attached image.
+- Using a local OpenAI-compatible server (e.g. Ollama / LM Studio) with local STT/TTS keeps chat and voice inference on-device; optional network features such as web search/fetch, the isolated browser, and external MCP servers are independent and remain governed by configuration and `ToolPolicyEngine`.
