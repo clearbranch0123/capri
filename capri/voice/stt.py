@@ -148,6 +148,9 @@ class SpeechRecognizer:
         consecutive_silence = 0
         silence_threshold = 0.008
 
+        if stop_event and stop_event.is_set():
+            return np.array([], dtype=np.float32)
+
         if sd is None:
             raise RuntimeError(f"Микрофон недоступен (PortAudio/sounddevice): {_SOUNDDEVICE_IMPORT_ERROR}")
         with sd.InputStream(**self._stream_kwargs()) as stream:

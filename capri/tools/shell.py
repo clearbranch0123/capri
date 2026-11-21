@@ -16,10 +16,25 @@ MAX_SUBPROCESS_OUTPUT_BYTES = 64 * 1024  # 64 KiB hard cap per stream to prevent
 
 
 async def _terminate_proc_safely(proc: asyncio.subprocess.Process) -> None:
+    import os
+    import signal
+
     if proc.returncode is not None:
         return
+
+    pid = getattr(proc, "pid", None)
+    use_pgroup = False
+    if isinstance(pid, int) and pid > 0 and hasattr(os, "killpg"):
+        try:
+            use_pgroup = os.getpgid(pid) == pid and pid != os.getpgrp()
+        except Exception:
+            use_pgroup = False
+
     try:
-        proc.terminate()
+        if use_pgroup:
+            os.killpg(pid, signal.SIGTERM)
+        else:
+            proc.terminate()
     except ProcessLookupError:
         return
     except Exception:
@@ -30,7 +45,10 @@ async def _terminate_proc_safely(proc: asyncio.subprocess.Process) -> None:
     except Exception:
         pass
     try:
-        proc.kill()
+        if use_pgroup:
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            proc.kill()
     except ProcessLookupError:
         return
     except Exception:
@@ -143,6 +161,7 @@ async def run_bash(command: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path.home()),
+            start_new_session=True,
         )
         stdout, stderr, truncated, timed_out = await communicate_bounded(
             proc, timeout=20.0, max_bytes=MAX_SUBPROCESS_OUTPUT_BYTES

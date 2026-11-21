@@ -258,8 +258,11 @@ def test_cyberdeck_memory_workbench_commands(tmp_path, monkeypatch):
         deck._handle_command("/forget stack")
         assert "stack" not in deck.agent.memory_store.entries
 
-        # 7. /memory export (изолируем в tmp_path)
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        # 7. /memory export (изолируем в tmp_path и XDG_CONFIG_HOME)
+        import os
+        with patch("pathlib.Path.home", return_value=tmp_path), patch.dict(
+            os.environ, {"XDG_CONFIG_HOME": str(tmp_path / ".config")}
+        ):
             deck._handle_command("/memory export")
             export_files = list((tmp_path / ".config" / "capri" / "backups").glob("memory_export_*.json"))
             assert len(export_files) == 1
