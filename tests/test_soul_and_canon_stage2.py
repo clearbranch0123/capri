@@ -380,7 +380,7 @@ def test_stage2_prompt_budget_stays_lean():
 
 
 def test_edited_candidate_approval_blocks_secrets_in_store_and_dialog(tmp_path, monkeypatch, caplog):
-    """Codex Stage 2 Finding #1: editing a safe candidate into a secret must NEVER save to memory.json or log secrets."""
+    """Stage 2 security gate: editing a safe candidate into a secret must NEVER save to memory.json or log secrets."""
     import logging
     from PySide6.QtWidgets import QMessageBox
 
@@ -398,7 +398,7 @@ def test_edited_candidate_approval_blocks_secrets_in_store_and_dialog(tmp_path, 
     assert len(proposed) == 1
     cand = proposed[0]
 
-    # Exact Codex repro: edit fact/key into secrets — must NOT save and must NOT leak into logs
+    # Edit fact/key into secrets — must NOT save and must NOT leak into logs
     assert store.approve_candidate(cand.id, fact="password: hunter2") is None
     assert store.approve_candidate(cand.id, key="password=hunter2", fact="x") is None
     assert store.approve_candidate(cand.id, key="sk-1234567890abcdef", fact="x") is None
@@ -435,7 +435,7 @@ def test_edited_candidate_approval_blocks_secrets_in_store_and_dialog(tmp_path, 
 
 
 def test_direct_memory_tools_require_user_confirmation_via_policy_engine(tmp_path, monkeypatch):
-    """Codex Stage 2 Finding #2: LLM calling remember/update_memory_entry/forget_memory cannot bypass confirmation."""
+    """Stage 2 policy gate: LLM calling remember/update_memory_entry/forget_memory cannot bypass confirmation."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr("capri.core.emotions.EMOTION_FILE", tmp_path / "emotion.json")

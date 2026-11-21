@@ -150,7 +150,7 @@ def test_zero_hardcoded_d_across_prompts_emotions_context_initiative(tmp_path, m
 
 
 def test_observer_and_ui_fallbacks_have_no_hardcoded_d(tmp_path, monkeypatch):
-    """Codex Stage 1 follow-ups: observer.py passes user_name; widgets.py fallbacks are neutral."""
+    """Stage 1 regression: observer.py passes user_name; widgets.py fallbacks are neutral."""
     import asyncio
     from types import SimpleNamespace
     from PySide6.QtWidgets import QApplication

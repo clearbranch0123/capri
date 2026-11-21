@@ -9,19 +9,19 @@
 
 > **Примечание о лицензии:** лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
-Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*, `v3.2`) и единой дизайн-системой **Crimson Graphite**. Приложение, история диалогов, память и ключи хранятся полностью локально на вашем ПК, а нейроядро (LLM) подключается через выбранного API-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или любой локальный OpenAI-совместимый сервер (например, Ollama / LM Studio).
+Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*, `v3.2`) и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачного LLM-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или облачных сервисов речи/зрения запросы, активный контекст диалога и подтверждённые факты памяти передаются выбранному вами API; для полностью локальной работы без внешних сетевых вызовов поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS.
 
 Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), управляемую память через кандидатов с фильтрацией секретов и TTL (`Memory Workbench`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), эмоциональный движок, синтетический харнесс оценки характера (`scripts/eval_persona.py`) и опциональный desktop-аватар.
 
 ---
 
-## 🖼️ Интерфейс Capri (Crimson Graphite)
+## 🖼️ Интерфейс Capri 3.2 (Crimson Graphite)
 
 ### Cyberdeck
-![Capri Cyberdeck v3.1](docs/screenshots/cyberdeck.png)
+![Capri Cyberdeck v3.2](docs/screenshots/cyberdeck.png)
 
 ### Relic Construct Dashboard
-![Capri Relic Dashboard v3.1](docs/screenshots/relic.png)
+![Capri Relic Dashboard v3.2](docs/screenshots/relic.png)
 
 ---
 
@@ -50,8 +50,11 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ```
 Скрипт создаст `.venv`, установит пакет `capri` (`capri`, `capri-deck`, `capri-avatar`), развернёт чистые шаблоны `$XDG_CONFIG_HOME/capri/.env` (`0600`) и `config.yaml` (по умолчанию в `~/.config/capri/`) и установит `.desktop`-файл.
 
-### 2. Настройка API-ключей
-Ключи хранятся **только локально** в `~/.config/capri/.env` (права `0600`) и никогда не записываются в `config.yaml`:
+### 2. Настройка API-ключей и передача данных
+Ключи хранятся **только локально** в `~/.config/capri/.env` (права `0600`) и никогда не записываются в `config.yaml`.
+
+> **Куда уходят данные при работе:** локальная база сессий, неподтверждённые кандидаты памяти и `.env` никогда не покидают ваш ПК. При обращении к выбранному облачному провайдеру передаются только системный промпт, реплики текущего окна контекста и явно подтверждённые факты памяти (а при вызове облачного STT / TTS / Vision — соответствующий аудиофрагмент или скриншот). При подключении локального LLM-сервера (Ollama / LM Studio) и локального STT/TTS все вычисления остаются на вашем устройстве.
+
 1. Запусти `./run.sh --gui` — при первом запуске откроется мастер `/setup`, где можно выбрать провайдера и ввести ключ.
 2. Или отредактируй `~/.config/capri/.env` вручную:
    - **Groq** *(быстрый бесплатный старт для чата + Whisper STT)*: `GROQ_API_KEY=...` (`console.groq.com`)

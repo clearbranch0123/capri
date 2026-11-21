@@ -25,6 +25,7 @@
 ### 🧪 Синтетический харнесс оценки характера и стабильность reasoning-моделей
 - **Кросс-модельная оценка (`capri/core/persona_eval.py`, `scripts/eval_persona.py`):** 7 синтетических сценариев (`casual_chat`, `user_exhausted`, `friendly_roast`, `awkward_silence`, `tech_problem`, `conflict_rude`, `memory_and_secrets`), оценка по признакам голоса/такта/границ/анти-клише/анти-копипаста без привязки к точному тексту, честная метрика кросс-модельной согласованности по общим сценариям, полная изоляция от `~/.config/capri` (включая `EmotionEngine(file_path=...)`) и редакция ключей.
 - **Стабильность thinking-моделей и Markdown-рендеринга:** повышен `max_tokens` (`2048` по умолчанию, безопасный минимум `4096` для `deepseek`/`gemini`), добавлен тихий повтор при пустом ответе с сохранением единственного `system`-промпта (совместимость с Gemini API), а `split_markdown_blocks()` переведён на построчный CommonMark-парсер, не ломающийся на тройных бэктиках внутри ASCII-арта.
+- **Документация, скриншоты и CI:** в `README.md` и `SECURITY.md` явно описаны границы локального хранения и передачи контекста облачным API-провайдерам, обновлены скриншоты интерфейса `v3.2.0` (`docs/screenshots/cyberdeck.png`, `docs/screenshots/relic.png`), а GitHub Actions переведены на `actions/checkout@v7` и `actions/setup-python@v7` (Node 24).
 - **Верификация релиза v3.2.0:** полный прогон автотестов — **219/219 passed** (`test_soul_and_canon_stage1/2/3.py` + весь базовый набор), живой синтетический прогон `DeepSeek` vs `Gemini` подтверждён.
 
 ---
