@@ -1,0 +1,30 @@
+# Virtual environments
+.venv/
+.venv*/
+
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Sensitive environment variables, API keys & local user config
+.env
+!.env.example
+config.yaml
+!config.example.yaml
+
+# Runtime caches, build artifacts and OS files
+build/
+dist/
+*.egg-info/
+*.tmp
+*.log
+.DS_Store
+.pytest_cache/
+
+# Large model binaries & private local voice reference clips
+models/vosk*/
+models/*.zip
+models/*.tar.gz
+capri/assets/capri_ru_dub_clean_20s.wav
+.releaseignore

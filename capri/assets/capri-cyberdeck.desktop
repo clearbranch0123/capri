@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Capri Cyberdeck
+Comment=Cyberpunk AI Companion for Linux
+Exec=@CAPRI_ROOT@/run.sh --gui
+Icon=@CAPRI_ROOT@/capri/assets/avatar.png
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=capri-cyberdeck

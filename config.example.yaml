@@ -1,0 +1,70 @@
+# Capri AI Companion — Example Configuration (Secret-Free Template)
+# Copy to ~/.config/capri/config.yaml (or ./config.yaml for local dev).
+# IMPORTANT: Never store API keys in YAML! Put all API keys in .env or environment variables.
+
+companion:
+  mode: normal
+  name: Капри
+  proactive_enabled: true
+  style: edgerunner
+  user_name: User
+llm:
+  api_key: ''
+  base_url: https://api.deepseek.com
+  frequency_penalty: 0.6
+  max_tokens: 1024
+  model: deepseek-flash
+  presence_penalty: 0.5
+  provider: deepseek
+  temperature: 0.75
+safety:
+  allow_shell_read_only: true
+  tool_policy: ask
+mcp:
+  enabled: false
+  servers: []
+ui:
+  auto_avatar_poses: true
+  avatar_enabled: true
+  avatar_mode: 2d
+  avatar_reactions_enabled: true
+  avatar_size: 240
+  game_mode_enabled: true
+  minimize_to_tray: true
+  reduced_motion: false
+vision:
+  enabled: true
+  gemini_api_key: ''
+  jpeg_quality: 80
+  max_dimension: 1280
+  model: gemini-2.5-flash
+  provider: gemini
+voice:
+  barge_in_rms_threshold: 0.032
+  elevenlabs_api_key: ''
+  elevenlabs_voice_id: ''
+  fish_audio_api_key: ''
+  fish_audio_voice_id: ''
+  gemini_api_key: ''
+  gemini_voice: Puck
+  hands_free_barge_in: true
+  input_device: ''
+  pipewire_aec_enabled: false
+  ptt_enabled: true
+  ptt_key: KEY_RIGHTALT
+  stt_compute_type: int8
+  stt_device: cpu
+  stt_language: ru
+  stt_mode: groq
+  stt_model_size: base
+  tts_enabled: true
+  tts_engine: edge
+  tts_pitch: +0Hz
+  tts_rate: +5%
+  tts_voice: ru-RU-SvetlanaNeural
+  wake_word_enabled: false
+  wake_words:
+  - капри
+  - эй капри
+  - привет капри
+  xtts_speaker_wav: assets/capri_voice_clean.wav
