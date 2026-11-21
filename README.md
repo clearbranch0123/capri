@@ -6,7 +6,7 @@
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20Wayland-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
 
-Локальный автономный ИИ-компаньон под Linux с характером киберпанк-нетраннера (Project Capricorn) и единой дизайн-системой **Crimson Graphite (v3.1)**.
+Десктопный ИИ-компаньон под Linux с характером киберпанк-нетраннера (Project Capricorn) и единой дизайн-системой **Crimson Graphite (v3.1)**. Приложение, история диалогов, память и ключи хранятся полностью локально на вашем ПК, а нейроядро (LLM) подключается через выбранного API-провайдера (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`) или любой локальный OpenAI-совместимый сервер (например, Ollama / LM Studio).
 
 Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), долговременную память **Memory Workbench**, эмоциональный движок и опциональный desktop-аватар.
 
