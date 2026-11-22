@@ -301,8 +301,11 @@ class DesktopObserver(QObject):
 
 
     def get_windows(self) -> list[dict]:
-        if detect_compositor() == "hyprland":
-            return compositor.get_windows()
+        comp = detect_compositor()
+        if comp in ("hyprland", "niri"):
+            wins = compositor.get_windows()
+            if wins:
+                return wins
         res = niri_json("windows")
         return res if isinstance(res, list) else []
 
@@ -338,9 +341,16 @@ class DesktopObserver(QObject):
                 return ws
         return workspaces[0] if workspaces else None
 
+    def get_monitors(self):
+        return compositor.get_monitors()
+
     def get_screen_size(self) -> tuple[int, int]:
         if detect_compositor() == "hyprland":
             return compositor.get_screen_size()
+        mons = compositor.get_monitors()
+        if mons:
+            focused = next((m for m in mons if m.is_focused), mons[0])
+            return int(round(focused.width)), int(round(focused.height))
         outputs = niri_json("outputs")
         if isinstance(outputs, dict):
             for name, out in outputs.items():
@@ -414,6 +424,12 @@ class LocomotionController(QObject):
         return w.get("id") if w else None
 
     def get_current_coords(self) -> tuple[float, float]:
+        if (
+            self.avatar_widget is not None
+            and getattr(self.avatar_widget, "using_layer_stage", False)
+            and hasattr(self.avatar_widget, "physics")
+        ):
+            return float(self.avatar_widget.physics.x), float(self.avatar_widget.physics.y)
         w = self.observer.get_avatar_window(os.getpid())
         if w:
             pos = w.get("layout", {}).get("tile_pos_in_workspace_view")
@@ -515,6 +531,9 @@ class LocomotionController(QObject):
         """«Капри, стой тут» / /stay: фиксация на месте, отключение следования."""
         self.mode = LocomotionMode.STAY
         self.anchor_coords = self.get_current_coords()
+        if self.avatar_widget is not None and hasattr(self.avatar_widget, "physics"):
+            self.avatar_widget.physics.sync_external_position(*self.anchor_coords)
+            self.avatar_widget.physics.set_pinned(True)
         msg = "Остаюсь тут. Свистнешь, если понадоблюсь."
         self.caption_requested.emit(msg)
         return True, "Stay mode active"
@@ -581,6 +600,11 @@ class LocomotionController(QObject):
         if gen != self._teleport_generation:
             return
 
+        if self.avatar_widget is not None and getattr(self.avatar_widget, "using_layer_stage", False):
+            self.avatar_widget.set_layer_position(target_x, target_y)
+            QTimer.singleShot(140, lambda: self._finish_teleport(gen, target_x, target_y))
+            return
+
         avatar_id = self.get_avatar_id()
         if avatar_id:
             comp = detect_compositor()
@@ -614,6 +638,8 @@ class LocomotionController(QObject):
         self.glitch_requested.emit()
         self.is_moving = False
         self.anchor_coords = (target_x, target_y)
+        if self.avatar_widget is not None and hasattr(self.avatar_widget, "physics"):
+            self.avatar_widget.physics.sync_external_position(target_x, target_y)
         self.locomotion_finished.emit("teleport", target_x, target_y)
 
 
@@ -624,7 +650,8 @@ class LocomotionController(QObject):
 
         self._teleport_generation += 1
 
-        avatar_id = self.get_avatar_id()
+        use_stage = bool(self.avatar_widget is not None and getattr(self.avatar_widget, "using_layer_stage", False))
+        avatar_id = "layer_stage" if use_stage else self.get_avatar_id()
         if not avatar_id:
             return
 
@@ -638,6 +665,7 @@ class LocomotionController(QObject):
         interval = max(14, duration_ms // steps)
         self.glide_data = {
             "avatar_id": avatar_id,
+            "use_stage": use_stage,
             "x0": cur_x,
             "y0": cur_y,
             "x1": target_x,
@@ -662,22 +690,29 @@ class LocomotionController(QObject):
         cur_x = data["x0"] + (data["x1"] - data["x0"]) * ease
         cur_y = data["y0"] + (data["y1"] - data["y0"]) * ease
 
-        dx = int(round(cur_x) - round(data["prev_x"]))
-        dy = int(round(cur_y) - round(data["prev_y"]))
-
-        if dx != 0 or dy != 0:
-            if detect_compositor() == "hyprland":
-                compositor.move_floating_window_sync(avatar_id, dx, dy)
-            else:
-                niri_cmd("msg", "action", "move-floating-window", "--id", str(avatar_id), "-x", f"{dx:+d}", "-y", f"{dy:+d}")
+        if data.get("use_stage") and self.avatar_widget is not None:
+            self.avatar_widget.set_layer_position(cur_x, cur_y)
             data["prev_x"] = cur_x
             data["prev_y"] = cur_y
+        else:
+            dx = int(round(cur_x) - round(data["prev_x"]))
+            dy = int(round(cur_y) - round(data["prev_y"]))
+
+            if dx != 0 or dy != 0:
+                if detect_compositor() == "hyprland":
+                    compositor.move_floating_window_sync(avatar_id, dx, dy)
+                else:
+                    niri_cmd("msg", "action", "move-floating-window", "--id", str(avatar_id), "-x", f"{dx:+d}", "-y", f"{dy:+d}")
+                data["prev_x"] = cur_x
+                data["prev_y"] = cur_y
 
         data["current_step"] += 1
         if step >= total:
             self.glide_timer.stop()
             self.is_moving = False
             self.anchor_coords = (data["x1"], data["y1"])
+            if self.avatar_widget is not None and hasattr(self.avatar_widget, "physics"):
+                self.avatar_widget.physics.sync_external_position(data["x1"], data["y1"])
             self.locomotion_finished.emit("glide", data["x1"], data["y1"])
 
     # ──────────────────────────────────────────────────────────────────────────

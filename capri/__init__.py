@@ -1,9 +1,9 @@
 """
 CAPRI // Cyberpunk AI Companion for Linux (Niri Wayland / Hyprland / Arch / CachyOS / Fedora)
-Construct Relic Engram — SOUL & CANON + CRIMSON GRAPHITE UNIFIED UI (v3.2.0)
+Construct Relic Engram — LIVING PHYSICS & SPATIAL AVATAR + CRIMSON GRAPHITE UNIFIED UI (v3.3.0)
 """
 
-__version__ = "3.2.0"
+__version__ = "3.3.0"
 __app_name__ = "Capri"
 __codename__ = "Project Capricorn // Relic Engram"
 __author__ = "D"

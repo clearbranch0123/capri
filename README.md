@@ -1,7 +1,7 @@
-# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.2 — Soul & Canon)
+# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.3 — Living Physics & Spatial Avatar)
 
-[![Version](https://img.shields.io/badge/version-v3.2.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.2.0)
-[![Tests](https://img.shields.io/badge/Tests-219%2F219%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Version](https://img.shields.io/badge/version-v3.3.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.3.0)
+[![Tests](https://img.shields.io/badge/Tests-244%2F244%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20Wayland-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
@@ -9,19 +9,19 @@
 
 > **Примечание о лицензии:** лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
-Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*, `v3.2`) и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачных API выбранному вами провайдеру передаются только данные конкретного сервиса: для LLM — системный промпт, активный контекст диалога и подтверждённые факты памяти; для STT — аудиофрагмент речи; для TTS — текст ответа для озвучивания; для Vision — скриншот или прикреплённое изображение. Для локальной обработки чата и речи поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS (при этом опциональные сетевые функции — веб-поиск, изолированный браузер и внешние MCP-серверы — управляются отдельно через конфиг и политику инструментов).
+Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*), живым физическим Wayland-аватаром (*Living Physics & Spatial Avatar*, `v3.3`) и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачных API выбранному вами провайдеру передаются только данные конкретного сервиса: для LLM — системный промпт, активный контекст диалога и подтверждённые факты памяти; для STT — аудиофрагмент речи; для TTS — текст ответа для озвучивания; для Vision — скриншот или прикреплённое изображение. Для локальной обработки чата и речи поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS (при этом опциональные сетевые функции — веб-поиск, изолированный браузер и внешние MCP-серверы — управляются отдельно через конфиг и политику инструментов).
 
-Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), управляемую память через кандидатов с фильтрацией секретов и TTL (`Memory Workbench`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), эмоциональный движок, синтетический харнесс оценки характера (`scripts/eval_persona.py`) и опциональный desktop-аватар.
+Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, живой Wayland desktop-аватар на нативном click-through слое `zwlr_layer_shell_v1` (2D-физика перетаскивания и бросков 60/125 FPS, магнитная посадка на верхние грани окон, автономная жизнь, голографические эффекты, drop-in слоты пользовательских спрайтов в `~/.config/capri/sprites/` и карточка быстрого управления по ПКМ), токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), управляемую память через кандидатов с фильтрацией секретов и TTL (`Memory Workbench`), изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), эмоциональный движок и синтетический харнесс оценки характера (`scripts/eval_persona.py`).
 
 ---
 
-## 🖼️ Интерфейс Capri 3.2 (Crimson Graphite)
+## 🖼️ Интерфейс Capri 3.3 (Crimson Graphite)
 
 ### Cyberdeck
-![Capri Cyberdeck v3.2](docs/screenshots/cyberdeck.png)
+![Capri Cyberdeck v3.3](docs/screenshots/cyberdeck.png)
 
 ### Relic Construct Dashboard
-![Capri Relic Dashboard v3.2](docs/screenshots/relic.png)
+![Capri Relic Dashboard v3.3](docs/screenshots/relic.png)
 
 ---
 
@@ -74,7 +74,7 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./run.sh --gui         # Cyberdeck GUI
 ./run.sh --doctor      # Самодиагностика окружения
 ./run.sh --bugreport   # Безопасный баг-репорт (без ключей и переписки)
-./run.sh --test        # Полный прогон автотестов (v3.2.0: 219/219 passed)
+./run.sh --test        # Полный прогон автотестов (v3.3.0: 244/244 passed)
 ./.venv/bin/python scripts/eval_persona.py --mock --providers deepseek,gemini  # Синтетический тест характера (оффлайн)
 ```
 
@@ -115,6 +115,7 @@ git pull
 - **Диагностика и резервные копии:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/profile export`, `/profile restore <zip>`.
 - **Память и контекст:** `/new`, `/sessions`, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
 - **Интеграции v3.x:** `/mcp [status|connect|disconnect|tools]` *(асинхронное неблокирующее подключение)*, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
+- **Живой аватар (`v3.3`):** **ЛКМ** — перетаскивание и баллистический бросок по экрану (с посадкой на верхние грани окон); **Shift + отпускание ЛКМ** — закрепить в воздухе; **ПКМ** — карточка быстрого управления **Crimson Graphite** (позы, физика, автономная жизнь, `◈ Релик`, выключение аватара); свои спрайты (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, опциональный `poses.json`) можно положить в `~/.config/capri/sprites/`.
 
 ---
 

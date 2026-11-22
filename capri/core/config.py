@@ -126,6 +126,8 @@ class UIConfig(BaseModel):
     auto_avatar_poses: bool = True
     game_mode_enabled: bool = True
     avatar_reactions_enabled: bool = True
+    avatar_physics_enabled: bool = True
+    avatar_autonomous_life: bool = True
 
 
 class SafetyConfig(BaseModel):

@@ -308,14 +308,14 @@ def resolve_avatar_auto_pose(
 ) -> tuple[str, str]:
     """
     Deterministic avatar pose resolver returning `(pose, reason)`.
-    Valid poses: 'normal' | 'perch' | 'perch_music' | 'sleep'.
+    Valid poses: 'normal' | 'perch' | 'perch_music' | 'lounge' | 'walk' | 'sleep'.
     """
     st = (avatar_state or "idle").strip().lower()
     if game_mode_active:
         return "sleep", "power_saver"
     if st != "idle":
         return "normal", "active_interaction"
-    if manual_pose_override in ("normal", "perch", "perch_music", "sleep"):
+    if manual_pose_override in ("normal", "perch", "perch_music", "lounge", "walk", "sleep"):
         return manual_pose_override, "manual_override"
     if not auto_poses_enabled:
         return "normal", "auto_disabled"

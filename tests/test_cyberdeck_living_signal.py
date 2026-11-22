@@ -585,6 +585,15 @@ def test_v31_unified_crimson_graphite_shared_widgets_and_real_telemetry(tmp_path
     badge = UserMonogramBadge("D", size=20)
     assert badge.width() == 20
 
+    # Single-letter user nickname keeps only the monogram badge (no duplicate "(D) D")
+    from PySide6.QtWidgets import QLabel
+    card_single = ChatMessageCard("D", "Привет")
+    assert not any(lbl.text() == "D" for lbl in card_single.findChildren(QLabel))
+    card_multi = ChatMessageCard("Alex", "Привет")
+    assert any(lbl.text() == "Alex" for lbl in card_multi.findChildren(QLabel))
+    card_single.deleteLater()
+    card_multi.deleteLater()
+
     db_file = tmp_path / "test_v31_telemetry.db"
     sm = SessionManager(db_path=db_file)
     s1 = sm.create_session("Тест 3.1")

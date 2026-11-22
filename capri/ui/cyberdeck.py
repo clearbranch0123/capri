@@ -306,17 +306,20 @@ class ChatMessageCard(QFrame):
             b_layout.setContentsMargins(14, 10, 14, 11)
             b_layout.setSpacing(6)
 
-            badge = UserMonogramBadge(letter=self.sender or "User", size=20, parent=self.bubble)
+            sender_label = (self.sender or "User").strip() or "User"
+            badge = UserMonogramBadge(letter=sender_label, size=20, parent=self.bubble)
             header_layout.addWidget(badge)
 
-            lbl_name = QLabel(self.sender or "User")
-            lbl_name.setStyleSheet(f"""
-                color: {COLORS.text_primary};
-                font-family: {TYPE.sans};
-                font-size: 11.5px;
-                font-weight: 600;
-            """)
-            header_layout.addWidget(lbl_name)
+            # Avoid duplicating a single-character nickname (e.g. `(D) D`) next to its monogram badge
+            if sender_label.casefold() != badge._letter.casefold():
+                lbl_name = QLabel(sender_label)
+                lbl_name.setStyleSheet(f"""
+                    color: {COLORS.text_primary};
+                    font-family: {TYPE.sans};
+                    font-size: 11.5px;
+                    font-weight: 600;
+                """)
+                header_layout.addWidget(lbl_name)
 
             lbl_ts = QLabel(self.timestamp)
             lbl_ts.setStyleSheet(f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10px;")
