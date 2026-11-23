@@ -57,6 +57,7 @@ _WL_SEAT_GET_POINTER = 0
 _WL_SEAT_GET_KEYBOARD = 1
 _WL_POINTER_RELEASE = 1
 _WL_KEYBOARD_RELEASE = 0
+_WL_OUTPUT_RELEASE = 0
 
 # zwlr_layer_shell_v1 / zwlr_layer_surface_v1 opcodes & enums
 _LAYER_SHELL_GET_LAYER_SURFACE = 0
@@ -172,6 +173,16 @@ def probe_layer_shell_support(timeout: float = 0.5) -> bool:
 
 
 @dataclass
+class _WaylandOutput:
+    global_name: int
+    obj_id: int
+    version: int
+    name: str = ""
+    x: int = 0
+    y: int = 0
+
+
+@dataclass
 class _ShmBuffer:
     buffer_id: int
     pool_id: int
@@ -196,6 +207,8 @@ class WaylandLayerStage(QObject):
     pointer_press = Signal(float, float, int, bool)  # (x, y, button, shift_held)
     pointer_move = Signal(float, float, float)       # (x, y, monotonic_ts)
     pointer_release = Signal(float, float, int, bool)  # (x, y, button, shift_held)
+    outputs_changed = Signal(list)                   # list[str] of active wl_output connector names
+    output_switched = Signal(str)                    # active wl_output connector name
     closed = Signal()
 
     def __init__(self, parent: Optional[QObject] = None, namespace: str = "capri-avatar"):
@@ -210,6 +223,10 @@ class WaylandLayerStage(QObject):
         # Wayland bound object IDs
         self._registry_id: int = 0
         self._globals: dict[str, tuple[int, int]] = {}
+        self._outputs: dict[int, _WaylandOutput] = {}   # global_name -> _WaylandOutput
+        self._output_by_oid: dict[int, int] = {}        # obj_id -> global_name
+        self.active_output_name: str = ""
+        self._active_output_global: int = 0
         self._compositor_id: int = 0
         self._compositor_ver: int = 1
         self._shm_id: int = 0
@@ -218,6 +235,14 @@ class WaylandLayerStage(QObject):
         self._layer_shell_ver: int = 1
         self._surface_id: int = 0
         self._layer_surface_id: int = 0
+        self._pending_switch_surface_id: int = 0
+        self._pending_switch_layer_id: int = 0
+        self._pending_switch_target_global: int = 0
+        self._pending_switch_size: tuple[int, int] = (0, 0)
+        self._pending_switch_configured: bool = False
+        self._pending_switch_aborted: bool = False
+        self._switching_output: bool = False
+        self._deferred_hotplug_fallback: bool = False
         self._pointer_id: int = 0
         self._keyboard_id: int = 0
 
@@ -287,8 +312,194 @@ class WaylandLayerStage(QObject):
         self._send(pack_wl_message(_WL_REGISTRY_BIND if False else self._registry_id, _WL_REGISTRY_BIND, payload))
         return oid, ver
 
-    def start(self, timeout: float = 1.0) -> bool:
-        """Connect to Wayland, create the `TOP` layer surface, and wait for initial configure."""
+    def _bind_output(self, global_name: int, avail_ver: int) -> _WaylandOutput:
+        if global_name in self._outputs:
+            return self._outputs[global_name]
+        ver = min(int(avail_ver), 4)
+        oid = self._alloc_id()
+        payload = struct.pack("<I", global_name) + pack_wl_string("wl_output") + struct.pack("<II", ver, oid)
+        self._send(pack_wl_message(self._registry_id, _WL_REGISTRY_BIND, payload))
+        out = _WaylandOutput(global_name=global_name, obj_id=oid, version=ver)
+        self._outputs[global_name] = out
+        self._output_by_oid[oid] = global_name
+        return out
+
+    def available_outputs(self) -> list[str]:
+        """Return connector names of currently connected `wl_output` displays."""
+        return [o.name for o in self._outputs.values() if o.name]
+
+    def _find_output_by_name(self, output_name: str) -> Optional[_WaylandOutput]:
+        target = (output_name or "").strip()
+        if not target:
+            return None
+        for out in self._outputs.values():
+            if out.name == target:
+                return out
+        return None
+
+    def _create_layer_surface_pair(self, output_obj_id: int = 0) -> tuple[int, int]:
+        """Allocate and send initial config for a (wl_surface, zwlr_layer_surface_v1) pair."""
+        surf_id = self._alloc_id()
+        ls_id = self._alloc_id()
+        init_msgs = b"".join([
+            pack_wl_message(self._compositor_id, _WL_COMPOSITOR_CREATE_SURFACE, struct.pack("<I", surf_id)),
+            pack_wl_message(
+                self._layer_shell_id,
+                _LAYER_SHELL_GET_LAYER_SURFACE,
+                struct.pack("<IIII", ls_id, surf_id, int(output_obj_id), LAYER_TOP)
+                + pack_wl_string(self.namespace),
+            ),
+            pack_wl_message(ls_id, _LAYER_SURFACE_SET_SIZE, struct.pack("<II", 0, 0)),
+            pack_wl_message(ls_id, _LAYER_SURFACE_SET_ANCHOR, struct.pack("<I", ANCHOR_ALL)),
+            pack_wl_message(ls_id, _LAYER_SURFACE_SET_EXCLUSIVE_ZONE, struct.pack("<i", 0)),
+            pack_wl_message(ls_id, _LAYER_SURFACE_SET_MARGIN, struct.pack("<iiii", 0, 0, 0, 0)),
+            pack_wl_message(
+                ls_id,
+                _LAYER_SURFACE_SET_KEYBOARD_INTERACTIVITY,
+                struct.pack("<I", KB_INTERACTIVITY_NONE),
+            ),
+            pack_wl_message(surf_id, _WL_SURFACE_COMMIT),
+        ])
+        if not self._send(init_msgs):
+            return 0, 0
+        return surf_id, ls_id
+
+    def _create_layer_surface_on(self, output_obj_id: int = 0) -> bool:
+        surf_id, ls_id = self._create_layer_surface_pair(output_obj_id)
+        if not surf_id or not ls_id:
+            return False
+        self._surface_id = surf_id
+        self._layer_surface_id = ls_id
+        self._kb_interactivity = KB_INTERACTIVITY_NONE
+        self._last_input_mode = ""
+        self._last_input_rect = None
+        self._last_committed_rect = None
+        return True
+
+    def _run_deferred_hotplug_fallback(self, failed_target: str = "") -> None:
+        """If the active output disappeared during a switch transaction, migrate cleanly now."""
+        if not self._deferred_hotplug_fallback:
+            return
+        self._deferred_hotplug_fallback = False
+        if not self._active or self._sock is None or self._switching_output:
+            return
+        if self._active_output_global in self._outputs and self._layer_surface_id:
+            return
+        candidates = self.available_outputs()
+        if not candidates:
+            return
+        ordered = [c for c in candidates if c != failed_target] + [
+            c for c in candidates if c == failed_target
+        ]
+        for name in ordered:
+            if self.switch_output(name):
+                return
+
+    def switch_output(self, output_name: str, timeout: float = 0.45) -> bool:
+        """
+        Atomically migrate the active `zwlr_layer_surface_v1` onto a different connected `wl_output`
+        (by connector name, e.g. 'DP-1' / 'HDMI-A-1'). Keeps the previous surface alive until the
+        candidate surface receives `configure`; if switching times out, destroys only the candidate
+        and leaves the original stage intact and active. Non-reentrant: hotplug removals arriving
+        mid-transaction are deferred until the active transaction finishes.
+        """
+        if not self._active or self._sock is None or self._switching_output:
+            return False
+        target = self._find_output_by_name(output_name)
+        if target is None:
+            return False
+        if target.global_name == self._active_output_global and self._layer_surface_id:
+            return True
+
+        promoted = False
+        self._switching_output = True
+        try:
+            # Create candidate surface while keeping the current active surface alive for safe rollback
+            cand_surf, cand_ls = self._create_layer_surface_pair(target.obj_id)
+            if cand_surf and cand_ls:
+                self._pending_switch_surface_id = cand_surf
+                self._pending_switch_layer_id = cand_ls
+                self._pending_switch_target_global = target.global_name
+                self._pending_switch_size = (0, 0)
+                self._pending_switch_configured = False
+                self._pending_switch_aborted = False
+
+                was_blocking = self._sock.gettimeout()
+                try:
+                    self._sock.settimeout(timeout)
+                    pumped = self._pump_until(
+                        lambda: self._pending_switch_configured or self._pending_switch_aborted,
+                        timeout=timeout,
+                    )
+                finally:
+                    if self._sock is not None:
+                        if was_blocking is None or was_blocking == 0.0:
+                            self._sock.setblocking(False)
+                        else:
+                            self._sock.settimeout(was_blocking)
+
+                ok = bool(
+                    pumped
+                    and self._pending_switch_configured
+                    and not self._pending_switch_aborted
+                    and (target.global_name in self._outputs)
+                    and self._sock is not None
+                )
+                if not ok:
+                    # Roll back cleanly: destroy ONLY the failed candidate; keep original surface & buffers active!
+                    if self._sock is not None:
+                        self._send(
+                            pack_wl_message(cand_ls, _LAYER_SURFACE_DESTROY)
+                            + pack_wl_message(cand_surf, _WL_SURFACE_DESTROY)
+                        )
+                else:
+                    # Candidate configured cleanly -> atomically promote & tear down previous surface + old buffers
+                    old_ls = self._layer_surface_id
+                    old_surf = self._surface_id
+                    new_w, new_h = self._pending_switch_size
+
+                    self._surface_id = cand_surf
+                    self._layer_surface_id = cand_ls
+                    self._active_output_global = target.global_name
+                    self.active_output_name = target.name
+                    self._kb_interactivity = KB_INTERACTIVITY_NONE
+                    self._last_input_mode = ""
+                    self._last_input_rect = None
+                    self._last_committed_rect = None
+                    self._pending_frame = None
+                    self._pending_clear = False
+
+                    destroy_msgs = b""
+                    if old_ls:
+                        destroy_msgs += pack_wl_message(old_ls, _LAYER_SURFACE_DESTROY)
+                    if old_surf:
+                        destroy_msgs += pack_wl_message(old_surf, _WL_SURFACE_DESTROY)
+                    if destroy_msgs:
+                        self._send(destroy_msgs)
+
+                    self.width = int(new_w)
+                    self.height = int(new_h)
+                    self._recreate_buffers(self.width, self.height)
+                    self._configured_once = True
+                    promoted = True
+        finally:
+            self._pending_switch_surface_id = 0
+            self._pending_switch_layer_id = 0
+            self._pending_switch_target_global = 0
+            self._pending_switch_size = (0, 0)
+            self._pending_switch_configured = False
+            self._pending_switch_aborted = False
+            self._switching_output = False
+
+        if promoted:
+            self.configured.emit(self.width, self.height)
+            self.output_switched.emit(self.active_output_name)
+        if self._deferred_hotplug_fallback:
+            self._run_deferred_hotplug_fallback(failed_target="" if promoted else target.name)
+        return promoted
+
+    def start(self, timeout: float = 1.0, preferred_output: str = "") -> bool:
+        """Connect to Wayland, discover `wl_output` displays, create `TOP` layer surface, and wait for configure."""
         sock_path = get_wayland_socket_path()
         if not sock_path:
             return False
@@ -321,38 +532,31 @@ class WaylandLayerStage(QObject):
             self.close()
             return False
 
-        # 2. Bind required Wayland globals
+        # 2. Bind required Wayland globals (+ sync once if outputs were bound so wl_output.name arrives)
         self._compositor_id, self._compositor_ver = self._bind_global("wl_compositor", 4)
         self._shm_id, _ = self._bind_global("wl_shm", 1)
         self._seat_id, _ = self._bind_global("wl_seat", 5)
         self._layer_shell_id, self._layer_shell_ver = self._bind_global("zwlr_layer_shell_v1", 4)
 
-        # 3. Create wl_surface + zwlr_layer_surface_v1 anchored to all 4 edges (respects panels via zone=0).
-        # Start with KB_INTERACTIVITY_NONE so the overlay NEVER steals keyboard focus passively.
-        self._surface_id = self._alloc_id()
-        self._layer_surface_id = self._alloc_id()
-        self._kb_interactivity = KB_INTERACTIVITY_NONE
+        if self._outputs:
+            out_sync = self._alloc_id()
+            self._sync_callbacks.add(out_sync)
+            self._send(pack_wl_message(_WL_DISPLAY_ID, _WL_DISPLAY_SYNC, struct.pack("<I", out_sync)))
+            self._pump_until(lambda: out_sync not in self._sync_callbacks, timeout=min(0.4, timeout))
 
-        init_msgs = b"".join([
-            pack_wl_message(self._compositor_id, _WL_COMPOSITOR_CREATE_SURFACE, struct.pack("<I", self._surface_id)),
-            pack_wl_message(
-                self._layer_shell_id,
-                _LAYER_SHELL_GET_LAYER_SURFACE,
-                struct.pack("<IIII", self._layer_surface_id, self._surface_id, 0, LAYER_TOP)
-                + pack_wl_string(self.namespace),
-            ),
-            pack_wl_message(self._layer_surface_id, _LAYER_SURFACE_SET_SIZE, struct.pack("<II", 0, 0)),
-            pack_wl_message(self._layer_surface_id, _LAYER_SURFACE_SET_ANCHOR, struct.pack("<I", ANCHOR_ALL)),
-            pack_wl_message(self._layer_surface_id, _LAYER_SURFACE_SET_EXCLUSIVE_ZONE, struct.pack("<i", 0)),
-            pack_wl_message(self._layer_surface_id, _LAYER_SURFACE_SET_MARGIN, struct.pack("<iiii", 0, 0, 0, 0)),
-            pack_wl_message(
-                self._layer_surface_id,
-                _LAYER_SURFACE_SET_KEYBOARD_INTERACTIVITY,
-                struct.pack("<I", KB_INTERACTIVITY_NONE),
-            ),
-            pack_wl_message(self._surface_id, _WL_SURFACE_COMMIT),
-        ])
-        if not self._send(init_msgs):
+        target_oid = 0
+        target_out = self._find_output_by_name(preferred_output) if preferred_output else None
+        if target_out is not None:
+            target_oid = target_out.obj_id
+            self._active_output_global = target_out.global_name
+            self.active_output_name = target_out.name
+        elif len(self._outputs) == 1:
+            only = next(iter(self._outputs.values()))
+            self._active_output_global = only.global_name
+            self.active_output_name = only.name
+
+        # 3. Create wl_surface + zwlr_layer_surface_v1 anchored to all 4 edges (respects panels via zone=0).
+        if not self._create_layer_surface_on(target_oid):
             self.close()
             return False
 
@@ -442,6 +646,45 @@ class WaylandLayerStage(QObject):
                     if 8 + padded + 4 <= len(payload):
                         ver = struct.unpack_from("<I", payload, 8 + padded)[0]
                         self._globals[iface] = (name, ver)
+                        if iface == "wl_output":
+                            self._bind_output(name, ver)
+            elif op == 1 and len(payload) >= 4:  # wl_registry.global_remove (hotplug disconnect!)
+                removed_name = struct.unpack_from("<I", payload, 0)[0]
+                out = self._outputs.pop(removed_name, None)
+                if out is not None:
+                    self._output_by_oid.pop(out.obj_id, None)
+                    if out.version >= 3 and self._sock is not None:
+                        self._send(pack_wl_message(out.obj_id, _WL_OUTPUT_RELEASE))
+                    names = self.available_outputs()
+                    if self._active:
+                        self.outputs_changed.emit(names)
+                        if self._switching_output:
+                            # Defer hotplug migration until the in-flight switch_output() transaction finishes
+                            if removed_name == self._pending_switch_target_global:
+                                self._pending_switch_aborted = True
+                            if removed_name == self._active_output_global:
+                                self._deferred_hotplug_fallback = True
+                        elif removed_name == self._active_output_global and names:
+                            # Active output was unplugged while idle -> migrate cleanly to a remaining output!
+                            self.switch_output(names[0])
+            return
+
+        if obj_id in self._output_by_oid:
+            gname = self._output_by_oid[obj_id]
+            out = self._outputs.get(gname)
+            if out is not None:
+                if op == 0 and len(payload) >= 8:  # wl_output.geometry(x, y, ...)
+                    ox, oy = struct.unpack_from("<ii", payload, 0)
+                    out.x = int(ox)
+                    out.y = int(oy)
+                elif op == 4 and len(payload) >= 4:  # wl_output.name(str) (wl_output v4)
+                    str_len = struct.unpack_from("<I", payload, 0)[0]
+                    if str_len > 1 and 4 + str_len <= len(payload):
+                        out.name = payload[4 : 4 + str_len - 1].decode("utf-8", errors="replace")
+                        if gname == self._active_output_global and not self.active_output_name:
+                            self.active_output_name = out.name
+                        if self._active:
+                            self.outputs_changed.emit(self.available_outputs())
             return
 
         if obj_id in self._sync_callbacks and op == 0:  # wl_callback.done
@@ -458,6 +701,17 @@ class WaylandLayerStage(QObject):
                 self._send(pack_wl_message(self._seat_id, _WL_SEAT_GET_KEYBOARD, struct.pack("<I", self._keyboard_id)))
             return
 
+        if obj_id == self._pending_switch_layer_id and self._pending_switch_layer_id != 0:
+            if op == 0 and len(payload) >= 12:  # zwlr_layer_surface_v1.configure on candidate surface
+                serial, w, h = struct.unpack_from("<III", payload, 0)
+                self._send(pack_wl_message(obj_id, _LAYER_SURFACE_ACK_CONFIGURE, struct.pack("<I", serial)))
+                if w > 0 and h > 0:
+                    self._pending_switch_size = (int(w), int(h))
+                    self._pending_switch_configured = True
+            elif op == 1:  # zwlr_layer_surface_v1.closed on candidate surface
+                self._pending_switch_aborted = True
+            return
+
         if obj_id == self._layer_surface_id:
             if op == 0 and len(payload) >= 12:  # zwlr_layer_surface_v1.configure
                 serial, w, h = struct.unpack_from("<III", payload, 0)
@@ -471,7 +725,11 @@ class WaylandLayerStage(QObject):
                     self._configured_once = True
                     self.configured.emit(self.width, self.height)
             elif op == 1:  # zwlr_layer_surface_v1.closed
-                self._handle_disconnect()
+                if self._switching_output:
+                    self._layer_surface_id = 0
+                    self._deferred_hotplug_fallback = True
+                else:
+                    self._handle_disconnect()
             return
 
         if obj_id == self._pointer_id:
@@ -841,6 +1099,9 @@ class WaylandLayerStage(QObject):
                     self._send(pack_wl_message(self._layer_surface_id, _LAYER_SURFACE_DESTROY))
                 if self._surface_id:
                     self._send(pack_wl_message(self._surface_id, _WL_SURFACE_DESTROY))
+                for out in list(self._outputs.values()):
+                    if out.version >= 3:
+                        self._send(pack_wl_message(out.obj_id, _WL_OUTPUT_RELEASE))
             except Exception:
                 pass
             try:
@@ -848,7 +1109,19 @@ class WaylandLayerStage(QObject):
             except Exception:
                 pass
             self._sock = None
+        self._outputs.clear()
+        self._output_by_oid.clear()
+        self._active_output_global = 0
+        self.active_output_name = ""
         self._pointer_id = 0
         self._keyboard_id = 0
         self._layer_surface_id = 0
         self._surface_id = 0
+        self._pending_switch_surface_id = 0
+        self._pending_switch_layer_id = 0
+        self._pending_switch_target_global = 0
+        self._pending_switch_size = (0, 0)
+        self._pending_switch_configured = False
+        self._pending_switch_aborted = False
+        self._switching_output = False
+        self._deferred_hotplug_fallback = False

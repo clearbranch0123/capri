@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtQuickWidgets import QQuickWidget
+from .avatar_awareness import AvatarAwarenessEngine
 from .avatar_brain import AvatarLifeBrain, BrainAction
 from .avatar_physics import AvatarPhysics2D, PhysicsState, PhysicsStepResult
 from .avatar_popover import CapriAvatarQuickPopover
@@ -45,7 +46,12 @@ from .wayland_layer import (
     WaylandLayerStage,
     probe_layer_shell_support,
 )
-from ..core.compositor import MonitorWorkArea, compositor
+from ..core.compositor import (
+    MonitorWorkArea,
+    compositor,
+    find_adjacent_monitor,
+    map_y_between_monitors,
+)
 from ..core.config import load_config
 from ..core.presence import (
     GameModeState,
@@ -316,6 +322,15 @@ class CapriAvatarWidget(QWidget):
             physics_enabled=self.physics_enabled,
         )
         self.brain = AvatarLifeBrain(autonomous_enabled=self.autonomous_life_enabled)
+        try:
+            _cfg_aw = load_config()
+            _aw_user = str(getattr(getattr(_cfg_aw, "companion", None), "user_name", "User") or "User")
+            _aw_mode = str(getattr(getattr(_cfg_aw, "companion", None), "mode", "normal") or "normal")
+        except Exception:
+            _aw_user = "User"
+            _aw_mode = "normal"
+        self.companion_mode: str = _aw_mode
+        self.awareness = AvatarAwarenessEngine(user_name=_aw_user, now=time.time())
         self._auto_walk_target: Optional[tuple[float, float]] = None
         self._auto_walk_surface: Optional[LandingSurface] = None
         self._auto_walk_ipc_accum: float = 0.0
@@ -330,6 +345,7 @@ class CapriAvatarWidget(QWidget):
         self._verified_avatar_id = None
         self._last_anim_ts: float = time.monotonic()
         self._active_monitor: Optional[MonitorWorkArea] = None
+        self._known_monitors: list[MonitorWorkArea] = []
         self._cached_surfaces: list[LandingSurface] = []
 
         # Pure-Wayland zwlr_layer_shell_v1 60/165 FPS transparent click-through stage
@@ -416,8 +432,18 @@ class CapriAvatarWidget(QWidget):
         stage.pointer_press.connect(self._on_layer_pointer_press)
         stage.pointer_move.connect(self._on_layer_pointer_move)
         stage.pointer_release.connect(self._on_layer_pointer_release)
+        stage.outputs_changed.connect(self._on_layer_outputs_changed)
+        stage.output_switched.connect(self._on_layer_output_switched)
         stage.closed.connect(self._on_layer_closed)
-        if not stage.start():
+        preferred = ""
+        try:
+            self._known_monitors = compositor.get_monitors()
+            focused_m = next((m for m in self._known_monitors if m.is_focused), None)
+            if focused_m is not None:
+                preferred = focused_m.name
+        except Exception:
+            self._known_monitors = []
+        if not stage.start(preferred_output=preferred):
             return
 
         self.layer_stage = stage
@@ -510,6 +536,86 @@ class CapriAvatarWidget(QWidget):
         self.layer_stage = None
         if not self.isVisible():
             self.show()
+
+    def _on_layer_outputs_changed(self, _names: list) -> None:
+        try:
+            self._known_monitors = compositor.get_monitors()
+        except Exception:
+            pass
+        self._sync_quick_popover()
+
+    def _on_layer_output_switched(self, _output_name: str) -> None:
+        try:
+            self._known_monitors = compositor.get_monitors()
+        except Exception:
+            pass
+        self._cached_surfaces = []
+        self._sync_quick_popover()
+
+    def _current_compositor_monitor(self) -> Optional[MonitorWorkArea]:
+        if not self._known_monitors:
+            return None
+        active_name = self.layer_stage.active_output_name if self.layer_stage is not None else ""
+        if active_name:
+            for m in self._known_monitors:
+                if m.name == active_name:
+                    return m
+        return next((m for m in self._known_monitors if m.is_focused), self._known_monitors[0])
+
+    def _adjacent_monitor_flags(self) -> tuple[bool, bool]:
+        if not self.using_layer_stage or self.layer_stage is None or len(self._known_monitors) < 2:
+            return False, False
+        cur = self._current_compositor_monitor()
+        if cur is None:
+            return False, False
+        y_ref = cur.work_top + self.physics.y + 210.0
+        has_left = find_adjacent_monitor(cur, -1, y_ref, self._known_monitors) is not None
+        has_right = find_adjacent_monitor(cur, 1, y_ref, self._known_monitors) is not None
+        return has_left, has_right
+
+    def _migrate_layer_to_monitor(self, target_mon: MonitorWorkArea, *, side: int = 0) -> bool:
+        """
+        Migrate active Wayland layer stage to `target_mon`:
+        - `side in (-1, 1)`: seamless cross-monitor ballistic flight preserving `(vx, vy)` momentum!
+        - `side == 0`: deliberate hop via UI, landing calmly near home corner on `target_mon`.
+        """
+        if not self.using_layer_stage or self.layer_stage is None:
+            return False
+        prev_mon = self._current_compositor_monitor()
+        saved_vx = self.physics.vx
+        saved_vy = self.physics.vy
+        saved_y = self.physics.y
+
+        if not self.layer_stage.switch_output(target_mon.name):
+            return False
+
+        stage_w = float(self.layer_stage.width or target_mon.work_width)
+        stage_h = float(self.layer_stage.height or target_mon.work_height)
+        self.physics.active_surface = None
+        self.physics.perched = False
+        self._cached_surfaces = []
+
+        if side in (-1, 1):
+            if prev_mon is not None:
+                new_y = map_y_between_monitors(saved_y, prev_mon, target_mon, avatar_h=420.0)
+            else:
+                new_y = max(0.0, min(stage_h - 420.0, saved_y))
+            new_x = max(0.0, stage_w - 304.0) if side < 0 else 4.0
+            self.physics.x = new_x
+            self.physics.y = max(0.0, min(max(0.0, stage_h - 420.0), new_y))
+            self.physics.vx = saved_vx
+            self.physics.vy = saved_vy
+            self.physics.state = PhysicsState.FALLING
+        else:
+            nx = max(0.0, stage_w - 330.0)
+            ny = max(0.0, stage_h - 420.0)
+            self.physics.sync_external_position(nx, ny)
+            self.locomotion.home_coords = (nx, ny)
+            self.locomotion.anchor_coords = (nx, ny)
+            if hasattr(self, "canvas_v2"):
+                self.canvas_v2.trigger_glitch()
+        self._render_layer_frame()
+        return True
 
     def _compute_avatar_hitbox(self, draw_x: int, draw_y: int) -> tuple[int, int, int, int]:
         """
@@ -818,6 +924,13 @@ class CapriAvatarWidget(QWidget):
                 if data.get("type") == "locomotion" or data.get("action") in ("come", "stay", "follow", "home", "glide", "teleport"):
                     self.locomotion.handle_command(data)
                     continue
+                if data.get("type") == "audio_level":
+                    if hasattr(self, "canvas_v2"):
+                        self.canvas_v2.set_audio_level(
+                            float(data.get("level", 0.0)),
+                            source=str(data.get("source", "mic")),
+                        )
+                    continue
                 if data.get("type") == "power_saver":
                     if "override" in data:
                         self.game_mode_override = data["override"]
@@ -852,6 +965,10 @@ class CapriAvatarWidget(QWidget):
                         self.brain.set_enabled(self.autonomous_life_enabled)
                         if not self.autonomous_life_enabled:
                             self._cancel_autonomous_walk()
+                    if "companion_mode" in data:
+                        self.companion_mode = str(data.get("companion_mode") or "normal").strip().lower()
+                    if "user_name" in data and str(data.get("user_name") or "").strip():
+                        self.awareness.user_name = str(data["user_name"]).strip()
                     self._sync_auto_pose()
                     continue
                 new_state = data.get("state", self.state)
@@ -1083,7 +1200,10 @@ class CapriAvatarWidget(QWidget):
             self._cancel_autonomous_walk()
             self._autonomous_pose = None
         if state != AvatarState.IDLE or text:
-            self._last_interaction_ts = time.time()
+            now_act = time.time()
+            self._last_interaction_ts = now_act
+            if hasattr(self, "awareness") and self.awareness is not None:
+                self.awareness.note_user_activity(now_act)
         if self.power_saver_active:
             if state == AvatarState.IDLE:
                 self.anim_timer.stop()
@@ -1197,7 +1317,21 @@ class CapriAvatarWidget(QWidget):
                         self.physics.y + self.height() / 2.0,
                     )
                 self._active_monitor = mon
-                res = self.physics.step(dt, mon, surfaces=self._cached_surfaces)
+                adj_left, adj_right = self._adjacent_monitor_flags()
+                res = self.physics.step(
+                    dt,
+                    mon,
+                    surfaces=self._cached_surfaces,
+                    adjacent_left=adj_left,
+                    adjacent_right=adj_right,
+                )
+                if res.crossed_monitor_side != 0 and self.using_layer_stage:
+                    cur_m = self._current_compositor_monitor()
+                    if cur_m is not None:
+                        y_ref = cur_m.work_top + self.physics.y + 210.0
+                        nxt_m = find_adjacent_monitor(cur_m, res.crossed_monitor_side, y_ref, self._known_monitors)
+                        if nxt_m is not None:
+                            self._migrate_layer_to_monitor(nxt_m, side=res.crossed_monitor_side)
                 if not self.using_layer_stage:
                     self._apply_physics_ipc_move(res)
                 self._push_physics_visual(res)
@@ -1576,12 +1710,15 @@ class CapriAvatarWidget(QWidget):
     def _wire_quick_popover(self) -> None:
         p = self.quick_popover
         p.open_dashboard_requested.connect(self._open_relic_dashboard)
+        p.voice_action_requested.connect(self._trigger_voice_from_ui)
+        p.look_region_requested.connect(self._trigger_look_region_from_ui)
         p.pose_toggled.connect(self._toggle_quick_pose)
         p.physics_toggled.connect(self._toggle_physics_enabled)
         p.autonomous_toggled.connect(self._toggle_autonomous_life)
         p.follow_toggled.connect(self._toggle_follow_mode)
         p.auto_poses_toggled.connect(self._toggle_auto_poses)
         p.game_mode_cycled.connect(self._cycle_game_mode)
+        p.monitor_cycle_requested.connect(self._cycle_avatar_monitor)
         p.home_requested.connect(self._return_home_from_ui)
         p.pin_toggled.connect(self._toggle_pin_in_place)
         p.close_avatar_requested.connect(self._close_avatar_from_ui)
@@ -1601,12 +1738,36 @@ class CapriAvatarWidget(QWidget):
             pinned=self.physics.pinned,
             perched=self.physics.perched,
             has_lounge_sprite=bool(getattr(self.canvas_v2, "lounge_frames", [])) if hasattr(self, "canvas_v2") else False,
+            avatar_state=self.state,
+            available_monitors=self.layer_stage.available_outputs() if self.layer_stage is not None else [m.name for m in self._known_monitors],
+            active_monitor=self.layer_stage.active_output_name if self.layer_stage is not None else "",
         )
 
     def _open_relic_dashboard(self) -> None:
         self.dashboard.show()
         self.dashboard.raise_()
         self.dashboard.activateWindow()
+
+    def _trigger_voice_from_ui(self) -> None:
+        from .client import send_cyberdeck_command
+
+        now = time.time()
+        self._last_interaction_ts = now
+        self.awareness.note_user_activity(now)
+        cmd = "voice_stop" if self.state in (AvatarState.LISTENING, AvatarState.SPEAKING) else "voice_toggle"
+        ok = send_cyberdeck_command(cmd)
+        if not ok and self.reactions_enabled and not self.power_saver_active:
+            self._show_ephemeral_caption("Запусти Cyberdeck для голосового ввода.", ticks=160)
+
+    def _trigger_look_region_from_ui(self) -> None:
+        from .client import send_cyberdeck_command
+
+        now = time.time()
+        self._last_interaction_ts = now
+        self.awareness.note_user_activity(now)
+        ok = send_cyberdeck_command("look_region")
+        if not ok and self.reactions_enabled and not self.power_saver_active:
+            self._show_ephemeral_caption("Запусти Cyberdeck для анализа области экрана.", ticks=160)
 
     def _toggle_quick_pose(self, pose_key: str) -> None:
         self._last_interaction_ts = time.time()
@@ -1673,6 +1834,22 @@ class CapriAvatarWidget(QWidget):
         else:
             self.game_mode_override = None
             self.apply_game_mode(False, reason="manual_menu_auto")
+        self._sync_quick_popover()
+
+    def _cycle_avatar_monitor(self) -> None:
+        if not self.using_layer_stage or self.layer_stage is None:
+            return
+        names = self.layer_stage.available_outputs()
+        if len(names) < 2:
+            return
+        cur = self.layer_stage.active_output_name
+        idx = (names.index(cur) + 1) % len(names) if cur in names else 0
+        target_name = names[idx]
+        target_mon = next((m for m in self._known_monitors if m.name == target_name), None)
+        if target_mon is not None:
+            self._migrate_layer_to_monitor(target_mon, side=0)
+        else:
+            self.layer_stage.switch_output(target_name)
         self._sync_quick_popover()
 
     def _return_home_from_ui(self) -> None:
@@ -1762,6 +1939,8 @@ class CapriAvatarWidget(QWidget):
 
         direction = 1.0 if dx > 0.0 else -1.0
         self.physics.facing = 1 if direction > 0.0 else -1
+        if hasattr(self, "canvas_v2"):
+            self.canvas_v2.physics_facing = self.physics.facing
         new_x = self.physics.x + direction * step
         self.physics.x = new_x
         self.physics.y = ty
@@ -1774,6 +1953,19 @@ class CapriAvatarWidget(QWidget):
                     compositor.move_floating_window_exact_sync(wid, int(round(new_x)), int(round(ty)))
 
     def _tick_autonomous_brain(self) -> None:
+        # 0. Calm Living Awareness micro-reactions (strictly rate-limited, silent in Game/Focus/Quiet)
+        cue = self.awareness.tick(
+            now=time.time(),
+            reactions_enabled=self.reactions_enabled,
+            game_mode_active=self.power_saver_active,
+            companion_mode=self.companion_mode,
+            avatar_state=self.state,
+            physics_state=self.physics.state,
+            has_active_caption=bool((self.caption_text or "").strip()),
+        )
+        if cue.kind != "none" and cue.text:
+            self._show_ephemeral_caption(cue.text, ticks=220)
+
         if (
             not self.autonomous_life_enabled
             or self.power_saver_active

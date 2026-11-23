@@ -221,25 +221,31 @@ class HandsFreeBargeInMonitor:
         silence_timeout_chunks = int(1.1 / chunk_dur)
         max_chunks = int(12.0 / chunk_dur)
 
-        for _ in range(max_chunks):
-            if self._cancel_event.is_set():
-                return
-            try:
-                raw_data, _ = stream.read(block_size)
-            except Exception:
-                break
-            if not raw_data:
-                break
-            chunk_int16 = np.frombuffer(bytes(raw_data), dtype=np.int16)
-            chunk_float = chunk_int16.astype(np.float32) / 32768.0
-            recorded.append(chunk_float)
-            rms, _ = BargeInDetector.compute_rms_and_zcr(chunk_float)
-            if rms > silence_threshold:
-                silence_chunks = 0
-            else:
-                silence_chunks += 1
-                if silence_chunks >= silence_timeout_chunks:
+        from .stt import _emit_mic_audio_level, _normalize_mic_rms
+
+        try:
+            for _ in range(max_chunks):
+                if self._cancel_event.is_set():
+                    return
+                try:
+                    raw_data, _ = stream.read(block_size)
+                except Exception:
                     break
+                if not raw_data:
+                    break
+                chunk_int16 = np.frombuffer(bytes(raw_data), dtype=np.int16)
+                chunk_float = chunk_int16.astype(np.float32) / 32768.0
+                recorded.append(chunk_float)
+                rms, _ = BargeInDetector.compute_rms_and_zcr(chunk_float)
+                _emit_mic_audio_level(_normalize_mic_rms(rms))
+                if rms > silence_threshold:
+                    silence_chunks = 0
+                else:
+                    silence_chunks += 1
+                    if silence_chunks >= silence_timeout_chunks:
+                        break
+        finally:
+            _emit_mic_audio_level(0.0)
 
         if self._cancel_event.is_set() or not recorded or not self.stt or not self.on_text_ready:
             return

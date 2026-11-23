@@ -86,6 +86,41 @@ def _popover_qss() -> str:
             color: {P.text_on_accent};
             border-color: {P.crimson_hover};
         }}
+        QPushButton#popoverVoiceBtn {{
+            background-color: {P.signal_cyan_soft};
+            color: {P.signal_cyan};
+            border: 1px solid {P.signal_cyan_border};
+            border-radius: 9px;
+            padding: 6px 10px;
+            font-family: {T.sans};
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        QPushButton#popoverVoiceBtn:hover {{
+            background-color: {P.signal_cyan};
+            color: {P.canvas};
+            border-color: {P.signal_cyan};
+        }}
+        QPushButton#popoverVoiceBtn[active="true"] {{
+            background-color: {P.crimson};
+            color: {P.text_on_accent};
+            border-color: {P.crimson_hover};
+        }}
+        QPushButton#popoverLookBtn {{
+            background-color: {P.surface_raised};
+            color: {P.text_primary};
+            border: 1px solid {P.border_interactive};
+            border-radius: 9px;
+            padding: 6px 10px;
+            font-family: {T.sans};
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        QPushButton#popoverLookBtn:hover {{
+            background-color: {P.signal_cyan_soft};
+            color: {P.signal_cyan};
+            border-color: {P.signal_cyan_border};
+        }}
         QPushButton#popoverCloseBtn {{
             background-color: transparent;
             color: {P.text_muted};
@@ -224,12 +259,15 @@ class CapriAvatarQuickPopover(QWidget):
     """Minimalist Crimson Graphite quick-control popover opened on avatar right-click."""
 
     open_dashboard_requested = Signal()
+    voice_action_requested = Signal()
+    look_region_requested = Signal()
     pose_toggled = Signal(str)           # "perch" | "lounge" | "dance" | "sleep"
     physics_toggled = Signal()
     autonomous_toggled = Signal()
     follow_toggled = Signal()
     auto_poses_toggled = Signal()
     game_mode_cycled = Signal()
+    monitor_cycle_requested = Signal()
     home_requested = Signal()
     pin_toggled = Signal()
     close_avatar_requested = Signal()
@@ -323,12 +361,15 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_follow = _SwitchRowButton("Следовать за окном", self.card)
         self.row_auto_poses = _SwitchRowButton("Авто-позы (музыка / сон)", self.card)
         self.row_game_mode = _SwitchRowButton("Game Mode", self.card)
+        self.row_monitor = _SwitchRowButton("Монитор", self.card)
+        self.row_monitor.setVisible(False)
         for row in (
             self.row_physics,
             self.row_autonomous,
             self.row_follow,
             self.row_auto_poses,
             self.row_game_mode,
+            self.row_monitor,
         ):
             switches_box.addWidget(row)
         lay.addLayout(switches_box)
@@ -338,6 +379,23 @@ class CapriAvatarQuickPopover(QWidget):
         lay.addWidget(div2)
 
         # ── 4. Quick Action Footer ──────────────────────────────────────────
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(6)
+        self.btn_voice = QPushButton("🎙 Голос", self.card)
+        self.btn_voice.setObjectName("popoverVoiceBtn")
+        self.btn_voice.setProperty("active", "false")
+        self.btn_voice.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_voice.setToolTip("Начать голосовой ввод или остановить речь Капри")
+
+        self.btn_look_region = QPushButton("👁 Область", self.card)
+        self.btn_look_region.setObjectName("popoverLookBtn")
+        self.btn_look_region.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_look_region.setToolTip("Выделить область экрана и спросить Капри (slurp + grim)")
+
+        quick_row.addWidget(self.btn_voice, 1)
+        quick_row.addWidget(self.btn_look_region, 1)
+        lay.addLayout(quick_row)
+
         footer = QHBoxLayout()
         footer.setSpacing(6)
         self.btn_home = QPushButton("На базу", self.card)
@@ -357,6 +415,8 @@ class CapriAvatarQuickPopover(QWidget):
 
         # Wire signals: open Relic BEFORE hiding popover so Wayland hands focus cleanly
         self.btn_hud.clicked.connect(lambda: (self.open_dashboard_requested.emit(), self.hide()))
+        self.btn_voice.clicked.connect(lambda: (self.voice_action_requested.emit(), self.hide()))
+        self.btn_look_region.clicked.connect(lambda: (self.look_region_requested.emit(), self.hide()))
         self.btn_close.clicked.connect(self.hide)
         self.btn_quit_avatar.clicked.connect(lambda: (self.hide(), self.close_avatar_requested.emit()))
         self.row_physics.clicked.connect(self.physics_toggled.emit)
@@ -364,6 +424,7 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_follow.clicked.connect(self.follow_toggled.emit)
         self.row_auto_poses.clicked.connect(self.auto_poses_toggled.emit)
         self.row_game_mode.clicked.connect(self.game_mode_cycled.emit)
+        self.row_monitor.clicked.connect(self.monitor_cycle_requested.emit)
         self.btn_home.clicked.connect(lambda: (self.hide(), self.home_requested.emit()))
         self.btn_pin.clicked.connect(self.pin_toggled.emit)
 
@@ -384,8 +445,16 @@ class CapriAvatarQuickPopover(QWidget):
         pinned: bool,
         perched: bool,
         has_lounge_sprite: bool = False,
+        avatar_state: str = "idle",
+        available_monitors: Optional[list[str]] = None,
+        active_monitor: str = "",
     ) -> None:
-        if power_saver_active:
+        st_norm = (avatar_state or "idle").strip().lower()
+        if st_norm == "listening":
+            self.lbl_state.setText("MIC")
+        elif st_norm == "speaking":
+            self.lbl_state.setText("VOICE")
+        elif power_saver_active:
             self.lbl_state.setText("GAME")
         elif pinned:
             self.lbl_state.setText("PINNED")
@@ -393,6 +462,12 @@ class CapriAvatarQuickPopover(QWidget):
             self.lbl_state.setText("PERCH")
         else:
             self.lbl_state.setText("LIVE")
+
+        voice_busy = st_norm in ("listening", "speaking")
+        self.btn_voice.setText("⏹ Стоп" if voice_busy else "🎙 Голос")
+        self.btn_voice.setProperty("active", "true" if voice_busy else "false")
+        self.btn_voice.style().unpolish(self.btn_voice)
+        self.btn_voice.style().polish(self.btn_voice)
 
         # Show "Лежать" only when a real custom lounge.png sprite is actually loaded!
         self.pose_buttons["lounge"].setVisible(bool(has_lounge_sprite))
@@ -419,6 +494,13 @@ class CapriAvatarQuickPopover(QWidget):
             self.row_game_mode.set_pill("OFF", "off")
         else:
             self.row_game_mode.set_pill("AUTO*" if power_saver_active else "AUTO", "on" if power_saver_active else "off")
+
+        mons = [m for m in (available_monitors or []) if m]
+        if len(mons) >= 2:
+            self.row_monitor.setVisible(True)
+            self.row_monitor.set_pill(active_monitor or mons[0], "on")
+        else:
+            self.row_monitor.setVisible(False)
 
         self.btn_pin.setText("Открепить" if pinned else "Закрепить тут")
         self.btn_pin.setProperty("pinned", "true" if pinned else "false")

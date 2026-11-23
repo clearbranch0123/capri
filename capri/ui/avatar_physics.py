@@ -77,6 +77,7 @@ class PhysicsStepResult:
     bounced: bool = False
     wall_hit: bool = False
     lost_footing: bool = False
+    crossed_monitor_side: int = 0       # -1 exited left into neighbor, +1 exited right into neighbor
     impact_strength: float = 0.0
     # Active landing surface & pose hint (Stage 2)
     surface_id: str = ""
@@ -608,6 +609,9 @@ class AvatarPhysics2D:
         dt: float,
         monitor: MonitorWorkArea,
         surfaces: Optional[list[LandingSurface]] = None,
+        *,
+        adjacent_left: bool = False,
+        adjacent_right: bool = False,
     ) -> PhysicsStepResult:
         """Advance physics & visual springs by `dt` seconds."""
         step_dt = max(1e-4, min(float(dt), 0.05))
@@ -707,8 +711,11 @@ class AvatarPhysics2D:
             if self.vy < 0.0:
                 self.vy = -self.vy * 0.25
 
-        # Left / right monitor wall collision
+        # Left / right monitor wall collision (or seamless cross-monitor flight across touching seams!)
         if self.x <= min_x:
+            if adjacent_left and self.vx < -140.0:
+                self.x = min_x
+                return self._make_result(crossed_monitor_side=-1)
             self.x = min_x
             impact_vx = abs(self.vx)
             if impact_vx >= self.cfg.wall_splat_speed:
@@ -730,6 +737,9 @@ class AvatarPhysics2D:
                 self.vx = -self.vx * self.cfg.wall_restitution
                 wall_hit = impact_vx > 120.0
         elif self.x >= max_x:
+            if adjacent_right and self.vx > 140.0:
+                self.x = max_x
+                return self._make_result(crossed_monitor_side=1)
             self.x = max_x
             impact_vx = abs(self.vx)
             if impact_vx >= self.cfg.wall_splat_speed:
@@ -871,6 +881,7 @@ class AvatarPhysics2D:
         bounced: bool = False,
         wall_hit: bool = False,
         lost_footing: bool = False,
+        crossed_monitor_side: int = 0,
         impact_strength: float = 0.0,
     ) -> PhysicsStepResult:
         surf = self.active_surface
@@ -887,6 +898,7 @@ class AvatarPhysics2D:
             bounced=bounced,
             wall_hit=wall_hit,
             lost_footing=lost_footing,
+            crossed_monitor_side=crossed_monitor_side,
             impact_strength=impact_strength,
             surface_id=surf.surface_id if surf is not None else "",
             surface_kind=surf.kind if surf is not None else SurfaceKind.FLOOR,

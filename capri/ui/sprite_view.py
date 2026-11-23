@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -108,11 +109,15 @@ class AvatarV2Canvas(QWidget):
         self.waking_active: bool = False
         self.wake_frame: int = 0
 
-        # Эмоция и синхронизированный липсинк (0..4 envelope @ 15 FPS)
+        # Эмоция, синхронизированный липсинк (0..4 envelope @ 15 FPS) и живая аудио-энергия (0.0..1.0)
         self.mood: str = "neutral"
         self.mouth_envelope: list[int] = []
         self.mouth_env_pos: int = 0
         self.current_mouth_idx: int = 0
+        self.audio_level_target: float = 0.0
+        self.audio_energy: float = 0.0
+        self.audio_source: str = "tts"
+        self._audio_level_ts: float = 0.0
 
         # 60 Hz in-canvas physics visual transform state (zero compositor IPC cost)
         self.reduced_motion: bool = False
@@ -334,6 +339,17 @@ class AvatarV2Canvas(QWidget):
                 self.waking_active = True
                 self.wake_frame = 0
 
+    def set_audio_level(self, level: float, source: str = "mic") -> None:
+        """Update live normalized audio energy (0.0..1.0) from microphone or TTS stream."""
+        clamped = max(0.0, min(1.0, float(level)))
+        self.audio_source = str(source or "mic")
+        self._audio_level_ts = time.monotonic()
+        if self.reduced_motion:
+            self.audio_level_target = 0.0
+            self.audio_energy = 0.0
+            return
+        self.audio_level_target = clamped
+
     def set_reduced_motion(self, enabled: bool):
         self.reduced_motion = bool(enabled)
         if self.reduced_motion:
@@ -344,6 +360,8 @@ class AvatarV2Canvas(QWidget):
             self.physics_impact_ripple = 0.0
             self.physics_vx = 0.0
             self.physics_vy = 0.0
+            self.audio_level_target = 0.0
+            self.audio_energy = 0.0
             self.update()
 
     def set_physics_visual(
@@ -465,6 +483,26 @@ class AvatarV2Canvas(QWidget):
         else:
             self.current_mouth_idx = 0
 
+        # 4. Живая аудио-реактивная энергия (TTS envelope / микрофонный RMS)
+        if self.reduced_motion:
+            self.audio_level_target = 0.0
+            self.audio_energy = 0.0
+        else:
+            if state == "speaking":
+                env_norm = max(0.0, min(1.0, self.current_mouth_idx / 4.0))
+                target_e = max(0.16, env_norm)
+            elif state == "listening":
+                if self._audio_level_ts > 0.0 and (time.monotonic() - self._audio_level_ts) > 0.45:
+                    self.audio_level_target *= 0.72
+                target_e = max(0.08, self.audio_level_target)
+            else:
+                self.audio_level_target = 0.0
+                target_e = 0.0
+            blend = 0.42 if target_e > self.audio_energy else 0.18
+            self.audio_energy = self.audio_energy + (target_e - self.audio_energy) * blend
+            if self.audio_energy < 0.005:
+                self.audio_energy = 0.0
+
         self.update()
 
     def _active_aura_color(self, state: str) -> QColor:
@@ -498,12 +536,67 @@ class AvatarV2Canvas(QWidget):
         base_char_y = max(72.0, float(canvas_h - self.target_h - 6))
         char_y = max(48.0, base_char_y + hover_y + (0.0 if self.reduced_motion else self.physics_offset_y))
 
-        # 1. Голографическая аура с учётом состояния и настроения
+        # 1. Голографическая аура в перспективе (точно под стопами, без обрезки по краям холста!)
         glow_col = self._active_aura_color(state)
-        grad = QRadialGradient(canvas_w / 2.0, char_y + self.target_h - 15.0, 78.0)
+        audio_e = 0.0 if self.reduced_motion else max(0.0, min(1.0, self.audio_energy))
+        # В idle.png стопы смещены вправо от центра ячейки (+18px), выравниваем центр проекции точно под каблуки
+        foot_dx = 18.0 if (self.pose == "normal" and not self.dance_active) else 0.0
+        cx = canvas_w / 2.0 + foot_dx
+        aura_rx = 66.0 + audio_e * 22.0
+        aura_ry = 15.0 + audio_e * 5.0
+        # Держим центр проекции не ниже canvas_h - 24, чтобы ни аура, ни внешнее кольцо никогда не срезались снизу
+        aura_cy = min(float(canvas_h) - 24.0, base_char_y + self.target_h - 20.0)
+        if audio_e > 0.02:
+            boosted_alpha = min(195, int(glow_col.alpha() + audio_e * 72.0))
+            glow_col = QColor(glow_col.red(), glow_col.green(), glow_col.blue(), boosted_alpha)
+        painter.save()
+        painter.translate(cx, aura_cy)
+        painter.scale(1.0, aura_ry / max(1.0, aura_rx))
+        grad = QRadialGradient(0.0, 0.0, aura_rx)
         grad.setColorAt(0.0, glow_col)
-        grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.fillRect(QRectF(0, char_y + self.target_h - 45.0, canvas_w, 60), QBrush(grad))
+        grad.setColorAt(0.55, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), int(glow_col.alpha() * 0.38)))
+        grad.setColorAt(1.0, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(grad))
+        painter.drawEllipse(QPointF(0.0, 0.0), aura_rx, aura_rx)
+        painter.restore()
+
+        # 1a. Тонкая голографическая голосовая пульсация (концентрические кольца проекции + мягкие искры)
+        if not self.reduced_motion and state in ("speaking", "listening") and audio_e > 0.02:
+            painter.save()
+            base_y = aura_cy
+            is_listen = (state == "listening")
+            r_c, g_c, b_c = (242, 119, 154) if is_listen else (105, 213, 232)
+
+            # Inner crisp holographic projection halo centered squarely under heels
+            inner_rx = 28.0 + audio_e * 18.0
+            inner_ry = 6.0 + audio_e * 4.0
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(r_c, g_c, b_c, int(45 + audio_e * 115)), 1.4))
+            painter.drawEllipse(QPointF(cx, base_y), inner_rx, inner_ry)
+
+            # Expanding echo ripple ring (strictly fits inside canvas bottom margin!)
+            wave_p = (self.hover_phase * 0.85) % 1.0
+            outer_rx = inner_rx + wave_p * (20.0 + audio_e * 14.0)
+            outer_ry = min(16.0, inner_ry + wave_p * (4.0 + audio_e * 3.0))
+            outer_a = int((1.0 - wave_p) * (35 + audio_e * 95))
+            if outer_a > 4:
+                painter.setPen(QPen(QColor(r_c, g_c, b_c, outer_a), 1.0))
+                painter.drawEllipse(QPointF(cx, base_y), outer_rx, outer_ry)
+
+            # 6 subtle rising holographic motes around the base
+            painter.setPen(Qt.PenStyle.NoPen)
+            for idx in range(6):
+                ang = (math.tau / 6.0) * idx + self.hover_phase * 0.9
+                lift = ((self.hover_phase * 0.7 + idx * 0.17) % 1.0)
+                mx = cx + math.cos(ang) * (20.0 + audio_e * 20.0)
+                my = base_y + math.sin(ang) * 5.5 - lift * (18.0 + audio_e * 26.0)
+                m_alpha = int((1.0 - lift) * (50 + audio_e * 135))
+                if m_alpha > 6:
+                    painter.setBrush(QBrush(QColor(r_c, g_c, b_c, min(220, m_alpha))))
+                    m_rad = 1.3 + (1.0 - lift) * 1.1 * audio_e
+                    painter.drawEllipse(QPointF(mx, my), m_rad, m_rad)
+            painter.restore()
 
         # 1b. Двойное голографическое кольцо приземления + микро-искры (60 Hz in-canvas, zero IPC)
         if not self.reduced_motion and self.physics_impact_ripple > 0.01:
@@ -610,16 +703,17 @@ class AvatarV2Canvas(QWidget):
 
         # 2b. Отрисовка спрайта персонажа по приоритету анимации + плавная физика без дёргания
         painter.save()
-        if not self.reduced_motion:
+        flip_walk_x = (self.pose == "walk" and self.physics_facing < 0)
+        if not self.reduced_motion or flip_walk_x:
             pivot_x = canvas_w / 2.0
             if self.physics_state == "landing":
                 pivot_y = char_y + self.target_h - 8.0
             else:
                 pivot_y = char_y + self.target_h * 0.5
 
-            total_tilt = 0.0 if self.physics_state == "grabbed" else self.physics_tilt_deg
-            sx = self.physics_scale_x
-            sy = self.physics_scale_y
+            total_tilt = 0.0 if (self.reduced_motion or self.physics_state == "grabbed") else self.physics_tilt_deg
+            sx = (1.0 if self.reduced_motion else self.physics_scale_x) * (-1.0 if flip_walk_x else 1.0)
+            sy = 1.0 if self.reduced_motion else self.physics_scale_y
             if abs(total_tilt) > 0.05 or abs(sx - 1.0) > 0.002 or abs(sy - 1.0) > 0.002:
                 painter.translate(pivot_x, pivot_y)
                 if abs(total_tilt) > 0.05:

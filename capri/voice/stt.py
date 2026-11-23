@@ -3,11 +3,72 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import queue
 import threading
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 import numpy as np
+
+
+def _normalize_mic_rms(rms: float) -> float:
+    """Map raw float32 microphone RMS (~0.004..0.12) cleanly to 0.0..1.0 visual energy."""
+    if rms <= 0.004:
+        return 0.0
+    return max(0.0, min(1.0, (float(rms) - 0.004) / 0.11))
+
+
+class _AsyncAudioLevelDispatcher:
+    """
+    Single-slot coalescing daemon sender so real-time PortAudio callbacks NEVER perform
+    blocking socket I/O. Enqueueing is O(1) non-blocking and drops stale intermediate levels.
+    """
+
+    def __init__(self) -> None:
+        self._queue: "queue.Queue[float]" = queue.Queue(maxsize=1)
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+
+    def _ensure_worker(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            t = threading.Thread(target=self._run, name="CapriAudioLevelSender", daemon=True)
+            self._thread = t
+            t.start()
+
+    def _run(self) -> None:
+        while True:
+            level = self._queue.get()
+            try:
+                from ..ui.client import notify_avatar_audio_level
+                notify_avatar_audio_level(level, source="mic")
+            except Exception:
+                pass
+
+    def enqueue(self, level: float) -> None:
+        self._ensure_worker()
+        try:
+            self._queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._queue.put_nowait(float(level))
+        except queue.Full:
+            pass
+
+
+_AUDIO_LEVEL_DISPATCHER = _AsyncAudioLevelDispatcher()
+
+
+def _emit_mic_audio_level(level: float) -> None:
+    """Strictly non-blocking mic level push to desktop avatar (no-op in offscreen runs)."""
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        return
+    _AUDIO_LEVEL_DISPATCHER.enqueue(level)
 try:
     import sounddevice as sd
 except Exception as _sd_exc:  # PortAudio/PulseAudio may be unavailable on headless Linux
@@ -55,10 +116,16 @@ class PushToTalkRecorder:
 
         self.frames = []
         self.is_recording = True
+        last_level_ts = [0.0]
 
         def callback(indata, frame_count, time_info, status):
             if self.is_recording:
                 self.frames.append(indata.copy())
+                now_t = time.monotonic()
+                if now_t - last_level_ts[0] >= 0.08:
+                    last_level_ts[0] = now_t
+                    rms = float(np.sqrt(np.mean(np.square(indata, dtype=np.float32))))
+                    _emit_mic_audio_level(_normalize_mic_rms(rms))
 
         kwargs = {
             "samplerate": self.sample_rate,
@@ -74,6 +141,7 @@ class PushToTalkRecorder:
 
     def stop(self) -> np.ndarray:
         self.is_recording = False
+        _emit_mic_audio_level(0.0)
         if self.stream:
             try:
                 self.stream.stop()
@@ -153,22 +221,26 @@ class SpeechRecognizer:
 
         if sd is None:
             raise RuntimeError(f"Микрофон недоступен (PortAudio/sounddevice): {_SOUNDDEVICE_IMPORT_ERROR}")
-        with sd.InputStream(**self._stream_kwargs()) as stream:
-            for _ in range(max_chunks):
-                if stop_event and stop_event.is_set():
-                    break
-                chunk, _ = stream.read(chunk_samples)
-                chunk_flat = chunk.flatten()
-                recorded.append(chunk_flat)
-
-                rms = float(np.sqrt(np.mean(chunk_flat ** 2)))
-                if rms > silence_threshold:
-                    speech_started = True
-                    consecutive_silence = 0
-                elif speech_started:
-                    consecutive_silence += 1
-                    if consecutive_silence >= silence_chunks_needed:
+        try:
+            with sd.InputStream(**self._stream_kwargs()) as stream:
+                for _ in range(max_chunks):
+                    if stop_event and stop_event.is_set():
                         break
+                    chunk, _ = stream.read(chunk_samples)
+                    chunk_flat = chunk.flatten()
+                    recorded.append(chunk_flat)
+
+                    rms = float(np.sqrt(np.mean(chunk_flat ** 2)))
+                    _emit_mic_audio_level(_normalize_mic_rms(rms))
+                    if rms > silence_threshold:
+                        speech_started = True
+                        consecutive_silence = 0
+                    elif speech_started:
+                        consecutive_silence += 1
+                        if consecutive_silence >= silence_chunks_needed:
+                            break
+        finally:
+            _emit_mic_audio_level(0.0)
 
         if not recorded:
             return np.array([], dtype=np.float32)

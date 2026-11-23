@@ -7,11 +7,40 @@ IPC-клиент для отправки событий из терминаль�
 from __future__ import annotations
 
 import json
+import os
 import socket
 from pathlib import Path
 from typing import Optional
 
 SOCKET_PATH = "/tmp/capri_avatar.sock"
+
+
+def get_cyberdeck_ipc_socket_path() -> str:
+    """Return per-user Unix socket path for running Capri Cyberdeck IPC."""
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if runtime_dir and os.path.isdir(runtime_dir):
+        return str(Path(runtime_dir) / "capri-cyberdeck.sock")
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return f"/tmp/capri-cyberdeck-{uid}.sock"
+
+
+def send_cyberdeck_command(cmd: str, socket_path: Optional[str] = None, timeout: float = 0.25) -> bool:
+    """Send a lightweight JSON command ('toggle'|'show'|'hide'|'quit'|'voice_toggle'|'voice_stop') to Cyberdeck."""
+    target = socket_path or get_cyberdeck_ipc_socket_path()
+    if not os.path.exists(target):
+        return False
+    raw = (json.dumps({"cmd": str(cmd).strip().lower()}) + "\n").encode("utf-8")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(target)
+            sock.sendall(raw)
+            try:
+                return bool(sock.recv(64))
+            except Exception:
+                return True
+    except OSError:
+        return False
 
 
 def notify_avatar(state: str, text: str = "", metadata: Optional[dict] = None) -> bool:
@@ -108,6 +137,26 @@ def send_avatar_control(payload: dict) -> bool:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.08)
+            sock.connect(SOCKET_PATH)
+            sock.sendall(raw_data)
+            return True
+    except Exception:
+        return False
+
+
+def notify_avatar_audio_level(level: float, source: str = "mic") -> bool:
+    """
+    Send lightweight normalized audio energy (0.0..1.0) to the desktop avatar for
+    real-time voice-reactive aura and equalizer rendering.
+    """
+    if not Path(SOCKET_PATH).exists():
+        return False
+    clamped = max(0.0, min(1.0, float(level)))
+    payload = {"type": "audio_level", "level": round(clamped, 3), "source": str(source or "mic")}
+    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.025)
             sock.connect(SOCKET_PATH)
             sock.sendall(raw_data)
             return True

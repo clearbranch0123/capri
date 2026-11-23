@@ -296,8 +296,26 @@ class XTTSDaemonClient:
         self.worker_script = worker_script
         self.proc: Optional[asyncio.subprocess.Process] = None
 
+    def _close_proc_transport(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc is None:
+            return
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        transport = getattr(proc, "_transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                pass
+
     async def ensure_running(self):
         if self.proc is None or self.proc.returncode is not None:
+            self._close_proc_transport()
             if not self.venv_python.exists():
                 raise FileNotFoundError(f"Python 3.10 environment not found at {self.venv_python}")
 
@@ -310,15 +328,22 @@ class XTTSDaemonClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            # Ждем готовности модели
-            while True:
-                line = await self.proc.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode().strip()
-                if "READY" in decoded:
-                    print("[XTTS] Воркер готов к синтезу!", flush=True)
-                    break
+            ready = False
+            try:
+                while True:
+                    line = await self.proc.stdout.readline()
+                    if not line:
+                        break
+                    decoded = line.decode().strip()
+                    if "READY" in decoded:
+                        print("[XTTS] Воркер готов к синтезу!", flush=True)
+                        ready = True
+                        break
+            except BaseException:
+                self._close_proc_transport()
+                raise
+            if not ready:
+                self._close_proc_transport()
 
     async def synthesize(self, text: str, output_path: str, speaker_path: str) -> bool:
         await self.ensure_running()
@@ -332,6 +357,7 @@ class XTTSDaemonClient:
         while True:
             res_line = await self.proc.stdout.readline()
             if not res_line:
+                self._close_proc_transport()
                 return False
             decoded = res_line.decode().strip()
             if not decoded:
@@ -349,13 +375,14 @@ class XTTSDaemonClient:
                 continue
 
     async def stop(self):
-        if self.proc and self.proc.returncode is None:
+        proc = self.proc
+        if proc and proc.returncode is None:
             try:
-                self.proc.terminate()
-                await self.proc.wait()
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=1.5)
             except Exception:
                 pass
-            self.proc = None
+        self._close_proc_transport()
 
 
 class SileroDaemonClient:
@@ -364,8 +391,26 @@ class SileroDaemonClient:
         self.worker_script = worker_script
         self.proc: Optional[asyncio.subprocess.Process] = None
 
+    def _close_proc_transport(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc is None:
+            return
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        transport = getattr(proc, "_transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                pass
+
     async def ensure_running(self):
         if self.proc is None or self.proc.returncode is not None:
+            self._close_proc_transport()
             if not self.venv_python.exists():
                 raise FileNotFoundError(f"Python environment not found at {self.venv_python}")
 
@@ -377,13 +422,21 @@ class SileroDaemonClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            while True:
-                line = await self.proc.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode().strip()
-                if "READY" in decoded:
-                    break
+            ready = False
+            try:
+                while True:
+                    line = await self.proc.stdout.readline()
+                    if not line:
+                        break
+                    decoded = line.decode().strip()
+                    if "READY" in decoded:
+                        ready = True
+                        break
+            except BaseException:
+                self._close_proc_transport()
+                raise
+            if not ready:
+                self._close_proc_transport()
 
     async def synthesize(self, text: str, output_path: str, speaker: str = "baya") -> bool:
         await self.ensure_running()
@@ -397,6 +450,7 @@ class SileroDaemonClient:
         while True:
             res_line = await self.proc.stdout.readline()
             if not res_line:
+                self._close_proc_transport()
                 return False
             decoded = res_line.decode().strip()
             if not decoded:
@@ -411,13 +465,14 @@ class SileroDaemonClient:
                 continue
 
     async def stop(self):
-        if self.proc and self.proc.returncode is None:
+        proc = self.proc
+        if proc and proc.returncode is None:
             try:
-                self.proc.terminate()
-                await self.proc.wait()
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=1.5)
             except Exception:
                 pass
-            self.proc = None
+        self._close_proc_transport()
 
 
 class StreamingTTSSession:
@@ -956,6 +1011,13 @@ class VoiceSynthesizer:
         except Exception:
             return False
         finally:
+            for p in (self._current_process, self._mirror_process):
+                transport = getattr(p, "_transport", None)
+                if transport is not None:
+                    try:
+                        transport.close()
+                    except Exception:
+                        pass
             self._current_process = None
             self._mirror_process = None
             if os.path.exists(audio_path):
@@ -1168,7 +1230,8 @@ class VoiceSynthesizer:
                 # Оповещаем UI-аватар о текущей фразе
                 try:
                     from ..ui.client import notify_avatar
-                    notify_avatar("speaking", chunks[i])
+                    envelope = compute_speech_envelope(None, phrase=chunks[i], fps=15)
+                    notify_avatar("speaking", chunks[i], metadata={"mouth_envelope": envelope})
                 except Exception:
                     pass
 

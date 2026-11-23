@@ -129,6 +129,131 @@ async def analyze_image_file(
     return "Оптический сенсор не смог распознать изображение (проверь GEMINI_API_KEY или наличие tesseract)."
 
 
+def capture_screen_region_sync(
+    timeout: float = 60.0,
+    cancel_event=None,
+) -> tuple[Optional[str], str]:
+    """
+    Interactively select a Wayland screen region (`slurp`) and capture it to a temporary
+    `0600` PNG via `grim`. Safe to run inside a worker thread (never blocks Qt UI) and
+    supports prompt cancellation via `cancel_event` with guaranteed temp-file cleanup.
+    Returns `(file_path, status)` where status is `'ok' | 'cancelled' | 'missing_tools' | 'error'`.
+    """
+    import subprocess
+    import time
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None, "cancelled"
+    if not shutil.which("slurp") or not shutil.which("grim"):
+        return None, "missing_tools"
+
+    def _terminate_proc(proc: subprocess.Popen) -> None:
+        if proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=0.5)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=0.5)
+            except Exception:
+                pass
+
+    # 1. Cancellable interactive `slurp` region selection
+    slurp_proc = None
+    region = ""
+    try:
+        slurp_proc = subprocess.Popen(
+            ["slurp"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + max(0.2, float(timeout))
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_proc(slurp_proc)
+                return None, "cancelled"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                _terminate_proc(slurp_proc)
+                return None, "cancelled"
+            try:
+                out, _ = slurp_proc.communicate(timeout=min(0.05, remaining))
+                region = (out or "").strip()
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if slurp_proc.returncode != 0 or not region:
+            return None, "cancelled"
+    except Exception:
+        if slurp_proc is not None:
+            _terminate_proc(slurp_proc)
+        return None, "error"
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None, "cancelled"
+
+    # 2. Capture selected region via `grim` into a private `0600` temp PNG
+    tmp_img = ""
+    grim_proc = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="capri_region_", suffix=".png", delete=False) as tmp:
+            tmp_img = tmp.name
+        try:
+            os.chmod(tmp_img, 0o600)
+        except OSError:
+            pass
+        grim_proc = subprocess.Popen(
+            ["grim", "-g", region, tmp_img],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        grim_deadline = time.monotonic() + 15.0
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_proc(grim_proc)
+                raise InterruptedError("cancelled")
+            remaining = grim_deadline - time.monotonic()
+            if remaining <= 0.0:
+                _terminate_proc(grim_proc)
+                raise TimeoutError("grim timeout")
+            try:
+                grim_proc.communicate(timeout=min(0.05, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("cancelled")
+        if grim_proc.returncode != 0 or not os.path.exists(tmp_img) or os.path.getsize(tmp_img) == 0:
+            if tmp_img and os.path.exists(tmp_img):
+                try:
+                    os.remove(tmp_img)
+                except OSError:
+                    pass
+            return None, "error"
+        return tmp_img, "ok"
+    except InterruptedError:
+        if tmp_img and os.path.exists(tmp_img):
+            try:
+                os.remove(tmp_img)
+            except OSError:
+                pass
+        return None, "cancelled"
+    except Exception:
+        if grim_proc is not None:
+            _terminate_proc(grim_proc)
+        if tmp_img and os.path.exists(tmp_img):
+            try:
+                os.remove(tmp_img)
+            except OSError:
+                pass
+        return None, "error"
+
+
 @tool(description="Оптическое зрение (Vision AI). Сделать снимок экрана и проанализировать происходящее: код, ошибки, веб-страницы, окна. query: вопрос к экрану, mode: 'fullscreen'|'select'.")
 async def look_at_screen(query: str = "", mode: str = "fullscreen") -> str:
     if not shutil.which("grim"):

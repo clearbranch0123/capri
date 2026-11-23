@@ -156,4 +156,32 @@ def test_procedural_effects_render_and_reduced_motion_suppression(monkeypatch, t
     canvas.set_pose("walk")
     assert canvas.pose == "walk"
     assert _count_non_transparent_pixels(_render_snapshot()) > 50
+
+    # 6. Walk pose mirrors horizontally when physics_facing == -1 (even with reduced_motion=True)
+    asym_dir = tmp_path / "asym_walk"
+    asym_dir.mkdir()
+    img_w = QImage(240, 384, QImage.Format.Format_ARGB32_Premultiplied)
+    img_w.fill(Qt.GlobalColor.transparent)
+    pw = QPainter(img_w)
+    pw.fillRect(150, 120, 70, 180, QColor(255, 20, 80, 255))  # strictly right-side block
+    pw.end()
+    assert img_w.save(str(asym_dir / "walk.png"), "PNG") is True
+    canvas.reload_sprites(user_sprites_dir=asym_dir)
+    canvas.set_pose("walk")
+    canvas.set_physics_visual(state=PhysicsState.IDLE, facing=1)
+    img_right = _render_snapshot()
+    canvas.set_physics_visual(state=PhysicsState.IDLE, facing=-1)
+    img_left = _render_snapshot()
+    # Center of mass of non-transparent red pixels must flip across canvas midline (x=150)
+    def _red_mean_x(im: QImage) -> float:
+        xs = [
+            x
+            for y in range(0, im.height(), 4)
+            for x in range(0, im.width(), 4)
+            if im.pixelColor(x, y).alpha() > 200 and im.pixelColor(x, y).red() > 200
+        ]
+        return sum(xs) / max(1, len(xs))
+
+    assert _red_mean_x(img_right) > 150.0
+    assert _red_mean_x(img_left) < 150.0
     host.close()

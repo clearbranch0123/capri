@@ -89,7 +89,7 @@ async def test_agent_sambanova_parameter_compatibility():
     mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
 
     with patch.object(agent, "_get_client", return_value=mock_client):
-        async for _ in agent.chat("Тест"):
+        async for _ in agent.chat("Тест", speak=False):
             pass
 
         assert mock_client.chat.completions.create.call_count == 1
@@ -120,7 +120,7 @@ async def test_agent_deepseek_compatibility_and_reasoning_retention():
 
     with patch.object(agent, "_get_client", return_value=mock_client):
         events = []
-        async for ev in agent.chat("Привет"):
+        async for ev in agent.chat("Привет", speak=False):
             events.append(ev)
 
         assert mock_client.chat.completions.create.call_count == 1

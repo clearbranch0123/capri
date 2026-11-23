@@ -18,16 +18,27 @@ async def _timer_worker(seconds: int, label: str):
 
     # 1. Desktop notification
     if shutil.which("notify-send"):
+        proc = None
         try:
-            await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 "notify-send",
                 "Капри: Таймер!",
                 f"Время вышло: {label} ({seconds} сек.)",
                 "-u", "critical",
                 "-t", "10000",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
+            await asyncio.wait_for(proc.wait(), timeout=3.0)
         except Exception:
             pass
+        finally:
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
 
     # 2. Avatar reaction
     notify_avatar("playful", f"⏰ Таймер: {label}!")
@@ -41,19 +52,27 @@ async def _timer_worker(seconds: int, label: str):
         )
         for sound in candidate_sounds:
             if Path(sound).exists():
+                cmd = None
                 if shutil.which("paplay"):
-                    await asyncio.create_subprocess_exec(
-                        "paplay", sound,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    break
+                    cmd = ["paplay", sound]
                 elif shutil.which("mpv"):
-                    await asyncio.create_subprocess_exec(
-                        "mpv", "--no-video", sound,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
+                    cmd = ["mpv", "--no-video", sound]
+                if cmd is not None:
+                    aproc = None
+                    try:
+                        aproc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        await asyncio.wait_for(aproc.wait(), timeout=5.0)
+                    finally:
+                        transport = getattr(aproc, "_transport", None)
+                        if transport is not None:
+                            try:
+                                transport.close()
+                            except Exception:
+                                pass
                     break
     except Exception:
         pass

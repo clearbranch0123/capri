@@ -237,6 +237,7 @@ def test_open_beta_governance_and_github_files_present():
         ROOT_DIR / "ASSETS_NOTICE.md",
         ROOT_DIR / "SECURITY.md",
         ROOT_DIR / "README.md",
+        ROOT_DIR / "docs" / "screenshots" / "capri-demo.webp",
         ROOT_DIR / "docs" / "screenshots" / "cyberdeck.png",
         ROOT_DIR / "docs" / "screenshots" / "relic.png",
         ROOT_DIR / ".github" / "workflows" / "ci.yml",

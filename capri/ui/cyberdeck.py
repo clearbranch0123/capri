@@ -1347,6 +1347,60 @@ def _make_dialog_header(title: str, subtitle: str, on_close) -> QHBoxLayout:
     return header
 
 
+class RegionCaptureWorker(QThread):
+    """Non-blocking, cancellable Wayland region screenshot worker (`slurp` + `grim`)."""
+
+    captured = Signal(str, str)  # (file_path_or_empty, status)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cancel_event = threading.Event()
+        self._path_lock = threading.Lock()
+        self._pending_path: Optional[str] = None
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def claim_pending_path(self) -> Optional[str]:
+        """Atomically transfer ownership of the captured temp file to the UI handler."""
+        with self._path_lock:
+            p = self._pending_path
+            self._pending_path = None
+            return p
+
+    def cleanup_unclaimed_path(self) -> None:
+        """Delete any captured temp screenshot that was never claimed by the UI handler."""
+        p = self.claim_pending_path()
+        if p and os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    def run(self):
+        path = ""
+        try:
+            from ..tools.screen import capture_screen_region_sync
+            cap_path, status = capture_screen_region_sync(cancel_event=self.cancel_event)
+            path = cap_path or ""
+            if path:
+                with self._path_lock:
+                    self._pending_path = path
+            if self.cancel_event.is_set():
+                self.cleanup_unclaimed_path()
+                return
+            self.captured.emit(path, status)
+        except Exception:
+            self.cleanup_unclaimed_path()
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            if not self.cancel_event.is_set():
+                self.captured.emit("", "error")
+
+
 class MicCalibrationWorker(QThread):
     """Guided 3-second microphone noise-floor + speech RMS calibration worker for Barge-In."""
 
@@ -5580,6 +5634,8 @@ class CapriCyberdeckWindow(QWidget):
                     "auto_avatar_poses": bool(getattr(self.config.ui, "auto_avatar_poses", True)),
                     "game_mode_enabled": bool(getattr(self.config.ui, "game_mode_enabled", True)),
                     "avatar_reactions_enabled": bool(getattr(self.config.ui, "avatar_reactions_enabled", True)),
+                    "companion_mode": str(getattr(self.config.companion, "mode", "normal") or "normal"),
+                    "user_name": str(getattr(self.config.companion, "user_name", "User") or "User"),
                 })
             elif self.avatar_proc and self.avatar_proc.poll() is None:
                 try:
@@ -6414,6 +6470,7 @@ class CapriCyberdeckWindow(QWidget):
                     self.agent.history[0] = {"role": "system", "content": self.agent._build_full_prompt()}
                 self._refresh_mode_button()
                 save_config(self.config)
+                send_avatar_control({"type": "config_sync", "companion_mode": sub})
                 desc = {
                     "focus": "FOCUS: Полная тишина, лаконичные ответы без шуток и болтовни.",
                     "normal": "NORMAL: Сбалансированный режим напарника — помощь и умеренный юмор.",
@@ -7553,6 +7610,90 @@ class CapriCyberdeckWindow(QWidget):
         self.input_field.setText("Капри, глянь на экран и опиши, что ты видишь.")
         self._send_message()
 
+    def _trigger_look_region(self):
+        """Interactive Wayland screen-region capture (`slurp` + `grim`) -> immediate Vision query."""
+        existing = getattr(self, "_region_capture_worker", None)
+        if existing is not None and existing.isRunning():
+            return
+        worker = RegionCaptureWorker(self)
+        self._region_capture_worker = worker
+        _track_qthread(worker)
+        worker.captured.connect(self._on_region_captured)
+        worker.start()
+
+    def _cancel_region_capture_worker(self, wait_ms: int = 1000) -> None:
+        rw = getattr(self, "_region_capture_worker", None)
+        self._region_capture_worker = None
+        if rw is None:
+            return
+        if not rw.isFinished():
+            _track_qthread(rw)
+        try:
+            rw.captured.disconnect()
+        except Exception:
+            pass
+        try:
+            rw.cancel()
+        except Exception:
+            pass
+        if rw.isRunning():
+            try:
+                rw.wait(max(100, int(wait_ms)))
+            except Exception:
+                pass
+        rw.cleanup_unclaimed_path()
+        if rw.isFinished():
+            _ACTIVE_QTHREADS.discard(rw)
+
+    def _on_region_captured(self, tmp_path: str, status: str):
+        rw = getattr(self, "_region_capture_worker", None)
+        if rw is not None:
+            rw.claim_pending_path()
+        self._region_capture_worker = None
+        if status == "cancelled":
+            return
+        if status == "missing_tools":
+            notify_avatar("playful", "Установи slurp и grim для захвата области.")
+            self._append_message("Система", "Для захвата области экрана нужны утилиты Wayland: `slurp` и `grim`.")
+            return
+        if status != "ok" or not tmp_path or not os.path.exists(tmp_path):
+            self._append_message("Система", "Не удалось захватить выбранную область экрана.")
+            return
+
+        from ..core.attachments import cleanup_temp_attachment, save_clipboard_image_bytes
+
+        raw_bytes = b""
+        try:
+            raw_bytes = Path(tmp_path).read_bytes()
+        except OSError:
+            raw_bytes = b""
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+        if not raw_bytes:
+            self._append_message("Система", "Захваченное изображение оказалось пустым.")
+            return
+
+        try:
+            att = save_clipboard_image_bytes(raw_bytes)
+        except ValueError as e:
+            self._append_message("Система", f"Скриншот области отклонён: {e}")
+            return
+
+        if not self.attachment_strip.add_attachment(att):
+            cleanup_temp_attachment(att)
+            self._append_message("Система", "Достигнут лимит вложений (максимум 6 на сообщение).")
+            return
+
+        play_ui_sound("ui_click")
+        self._show_and_raise()
+        if not self.input_field.toPlainText().strip():
+            self.input_field.setText("Глянь на эту область экрана: что тут происходит и если есть ошибка, подскажи как исправить.")
+        self._send_message()
+
     def _toggle_voice_input(self):
         if self._is_recording_voice():
             self._stop_voice_input()
@@ -7793,6 +7934,14 @@ class CapriCyberdeckWindow(QWidget):
                 self._show_and_raise()
             elif cmd == "hide":
                 self.hide()
+            elif cmd == "voice_toggle":
+                self._toggle_voice_input()
+            elif cmd == "voice_stop":
+                if self._is_recording_voice():
+                    self._stop_voice_input()
+                self._stop_generation(silent=True)
+            elif cmd == "look_region":
+                self._trigger_look_region()
             elif cmd == "quit":
                 QTimer.singleShot(0, self._quit_application)
             try:
@@ -7826,6 +7975,7 @@ class CapriCyberdeckWindow(QWidget):
             except Exception:
                 pass
         self._cancel_mcp_connect_worker(wait_ms=2500)
+        self._cancel_region_capture_worker(wait_ms=1000)
         if hasattr(self, "agent") and self.agent and getattr(self.agent, "mcp_manager", None):
             try:
                 self.agent.mcp_manager.shutdown_sync()
@@ -7927,6 +8077,7 @@ class CapriCyberdeckWindow(QWidget):
         if self.agent.history:
             self.agent.history[0] = {"role": "system", "content": self.agent._build_full_prompt()}
         save_config(self.config)
+        send_avatar_control({"type": "config_sync", "companion_mode": new_mode})
         self._refresh_mode_button()
         self._append_message("Система", f"Режим работы переключён: {new_mode.upper()}")
 
@@ -8051,11 +8202,12 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
     if any(a in ("--help", "-h") for a in args):
         print(
             f"Capri Cyberdeck v{__version__} — PySide6 Desktop Companion GUI\n"
-            "Usage: capri-deck [--toggle | --show | --hide | --quit] [--version] [--help]"
+            "Usage: capri-deck [--toggle | --show | --hide | --look-region | --quit] [--version] [--help]"
         )
         return 0
 
     # Native Wayland global-hotkey / single-instance IPC (Niri & Hyprland)
+    auto_look_region = False
     if "--toggle" in args:
         if send_cyberdeck_ipc("toggle"):
             return 0
@@ -8065,6 +8217,10 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
     elif "--hide" in args:
         send_cyberdeck_ipc("hide")
         return 0
+    elif "--look-region" in args:
+        if send_cyberdeck_ipc("look_region"):
+            return 0
+        auto_look_region = True
     elif "--quit" in args:
         send_cyberdeck_ipc("quit")
         return 0
@@ -8078,6 +8234,8 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
     app.setQuitOnLastWindowClosed(False)
     window = CapriCyberdeckWindow()
     window.show()
+    if auto_look_region:
+        QTimer.singleShot(350, window._trigger_look_region)
     sys.exit(app.exec())
 
 

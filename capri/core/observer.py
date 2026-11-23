@@ -156,6 +156,12 @@ class DesktopObserver:
                 self.proc.terminate()
             except Exception:
                 pass
+            transport = getattr(self.proc, "_transport", None)
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
             self.proc = None
         if self.task:
             self.task.cancel()
@@ -236,6 +242,20 @@ class DesktopObserver:
             except Exception as e:
                 logger.debug(f"Observer loop error: {e}")
                 await asyncio.sleep(5.0)
+            finally:
+                if self.proc is not None:
+                    if self.proc.returncode is None:
+                        try:
+                            self.proc.terminate()
+                        except Exception:
+                            pass
+                    transport = getattr(self.proc, "_transport", None)
+                    if transport is not None:
+                        try:
+                            transport.close()
+                        except Exception:
+                            pass
+                    self.proc = None
 
     async def _handle_event(self, event: dict):
         # В режиме FOCUS наблюдатель полностью замолкает

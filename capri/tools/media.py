@@ -32,6 +32,8 @@ async def media_control(action: str, player: str = "", **kwargs) -> str:
     p_flag = ["-p", player.strip().lower()] if player and player.strip() else []
 
     if action_clean in ("status", "info", "current", "track", "статус"):
+        status_proc = None
+        meta_proc = None
         try:
             # Получаем статус
             cmd = ["playerctl"] + p_flag + ["status"]
@@ -56,10 +58,19 @@ async def media_control(action: str, player: str = "", **kwargs) -> str:
             return "Таймаут получения статуса медиаплеера."
         except Exception as e:
             return f"Ошибка при получении статуса медиа: {e}"
+        finally:
+            for p in (status_proc, meta_proc):
+                transport = getattr(p, "_transport", None)
+                if transport is not None:
+                    try:
+                        transport.close()
+                    except Exception:
+                        pass
 
     if action_clean not in valid_actions:
         return f"Неизвестное действие '{action}'. Доступно: play, pause, stop, play-pause, next, previous, status."
 
+    proc = None
     try:
         base_cmd = valid_actions[action_clean]
         cmd = [base_cmd[0]] + p_flag + [base_cmd[1]]
@@ -76,6 +87,13 @@ async def media_control(action: str, player: str = "", **kwargs) -> str:
         return f"Медиа-команда '{action_clean}' отправлена (таймаут ответа плеера)."
     except Exception as e:
         return f"Ошибка управления плеером: {e}"
+    finally:
+        transport = getattr(proc, "_transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                pass
 
 
 @tool(

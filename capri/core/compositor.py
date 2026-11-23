@@ -65,6 +65,53 @@ class MonitorWorkArea:
         return (self.x <= px < self.x + self.width) and (self.y <= py < self.y + self.height)
 
 
+def find_adjacent_monitor(
+    current: MonitorWorkArea,
+    side: int,
+    y_ref: float,
+    monitors: list[MonitorWorkArea],
+    edge_tolerance: float = 64.0,
+) -> Optional[MonitorWorkArea]:
+    """
+    Find the adjacent monitor touching `current` on `side` (`-1` = left, `+1` = right)
+    whose vertical span actually contains global coordinate `y_ref`.
+    Rejects vertically disjoint/staggered monitors so Capri never crosses dead empty space.
+    """
+    if side not in (-1, 1) or not monitors:
+        return None
+    target_edge = current.x if side < 0 else (current.x + current.width)
+    best: Optional[tuple[float, MonitorWorkArea]] = None
+    for m in monitors:
+        if m.name == current.name:
+            continue
+        m_edge = (m.x + m.width) if side < 0 else m.x
+        edge_gap = abs(m_edge - target_edge)
+        if edge_gap > edge_tolerance:
+            continue
+        # Strictly require vertical overlap at y_ref so staggered monitors never bridge empty space
+        if not (m.y <= y_ref <= (m.y + m.height)):
+            continue
+        if best is None or edge_gap < best[0]:
+            best = (edge_gap, m)
+    return best[1] if best is not None else None
+
+
+def map_y_between_monitors(
+    local_y: float,
+    src: MonitorWorkArea,
+    dst: MonitorWorkArea,
+    avatar_h: float = 420.0,
+) -> float:
+    """
+    Convert avatar stage-local Y on `src` into clamped stage-local Y on `dst`,
+    preserving global vertical alignment across monitors of differing height or Y offset.
+    """
+    global_y = src.work_top + float(local_y)
+    dst_local = global_y - dst.work_top
+    max_y = max(0.0, float(dst.work_height) - float(avatar_h))
+    return max(0.0, min(max_y, dst_local))
+
+
 def _valid_niri_win_id(win_id: Any) -> Optional[int]:
     """Validate an explicit Niri numeric window ID (rejects None/bool/zero/negative)."""
     if win_id is None or isinstance(win_id, bool):

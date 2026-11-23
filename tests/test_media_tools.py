@@ -82,7 +82,7 @@ async def test_agent_tools_omitted_on_second_turn():
         mock_exec.return_value = "Playing: Yakui The Maid"
 
         events = []
-        async for ev in agent.chat("что играет?"):
+        async for ev in agent.chat("что играет?", speak=False):
             events.append(ev)
 
         assert mock_create.call_count == 2
@@ -113,7 +113,7 @@ async def test_agent_single_key_error_handling_and_rollback():
 
     with patch.object(agent, "_get_client", return_value=mock_client):
         events = []
-        async for ev in agent.chat("Привет"):
+        async for ev in agent.chat("Привет", speak=False):
             events.append(ev)
 
         assert mock_client.chat.completions.create.call_count == 1
