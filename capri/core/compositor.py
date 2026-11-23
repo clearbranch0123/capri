@@ -773,28 +773,170 @@ class CompositorBackend:
             return code == 0
         return False
 
-    def move_window_to_workspace_sync(self, win_id: Any, ws_idx: int) -> bool:
+    def move_window_to_workspace_sync(
+        self,
+        win_id: Any,
+        ws_idx: int,
+        *,
+        focus: bool = False,
+        use_id: bool = False,
+    ) -> bool:
         k = self.kind
         if k == "niri":
             nid = _valid_niri_win_id(win_id)
             if nid is None:
                 return False
+            ref_key = "Id" if use_id else "Index"
+            resp = _niri_socket_request(
+                {
+                    "Action": {
+                        "MoveWindowToWorkspace": {
+                            "window_id": nid,
+                            "reference": {ref_key: int(ws_idx)},
+                            "focus": bool(focus),
+                        }
+                    }
+                }
+            )
+            if isinstance(resp, dict):
+                return "Ok" in resp
+            if use_id:
+                return False
             code, _, _ = _run_sync(
-                ["niri", "msg", "action", "move-window-to-workspace", "--window-id", str(nid), "--focus", "false", str(ws_idx)]
+                [
+                    "niri", "msg", "action", "move-window-to-workspace",
+                    "--window-id", str(nid),
+                    "--focus", "true" if focus else "false",
+                    str(ws_idx),
+                ]
             )
             return code == 0
         if k == "hyprland":
             addr = _valid_hyprland_address(win_id)
             if addr is None:
                 return False
-            resp = _hyprland_socket_command(f"dispatch movetoworkspacesilent {int(ws_idx)},address:{addr}")
+            disp = "movetoworkspace" if focus else "movetoworkspacesilent"
+            resp = _hyprland_socket_command(f"dispatch {disp} {int(ws_idx)},address:{addr}")
             if resp is not None:
                 return resp.strip().lower() == "ok"
             code, _, _ = _run_sync(
-                ["hyprctl", "dispatch", "movetoworkspacesilent", f"{int(ws_idx)},address:{addr}"]
+                ["hyprctl", "dispatch", disp, f"{int(ws_idx)},address:{addr}"]
             )
             return code == 0
         return False
+
+    def get_focused_workspace_id_sync(self) -> Optional[int]:
+        """Return globally unique active/focused workspace ID via direct compositor socket IPC."""
+        k = self.kind
+        if k == "niri":
+            resp = _niri_socket_request("Workspaces")
+            ws_list = resp.get("Ok", {}).get("Workspaces") if isinstance(resp, dict) else None
+            if isinstance(ws_list, list):
+                for ws in ws_list:
+                    if isinstance(ws, dict) and ws.get("is_focused"):
+                        try:
+                            return int(ws["id"])
+                        except Exception:
+                            return None
+                for ws in ws_list:
+                    if isinstance(ws, dict) and ws.get("is_active"):
+                        try:
+                            return int(ws["id"])
+                        except Exception:
+                            return None
+            return None
+        if k == "hyprland":
+            raw = _hyprland_socket_command("j/activeworkspace")
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict) and "id" in data:
+                        return int(data["id"])
+                except Exception:
+                    return None
+        return None
+
+    def find_window_by_title_sync(self, exact_title: str) -> Optional[dict[str, Any]]:
+        """Find a live window matching `exact_title` via direct compositor socket IPC (zero subprocess)."""
+        target = (exact_title or "").strip()
+        if not target:
+            return None
+        k = self.kind
+        if k == "niri":
+            resp = _niri_socket_request("Windows")
+            wins = resp.get("Ok", {}).get("Windows") if isinstance(resp, dict) else None
+            if isinstance(wins, list):
+                for w in wins:
+                    if isinstance(w, dict) and (w.get("title") or "") == target:
+                        return {
+                            "id": w.get("id"),
+                            "workspace_id": w.get("workspace_id"),
+                            "is_floating": bool(w.get("is_floating", False)),
+                            "is_focused": bool(w.get("is_focused", False)),
+                        }
+            return None
+        if k == "hyprland":
+            raw = _hyprland_socket_command("j/clients")
+            if raw:
+                try:
+                    clients = json.loads(raw)
+                except Exception:
+                    clients = []
+                if isinstance(clients, list):
+                    for c in clients:
+                        if isinstance(c, dict) and (c.get("title") or "") == target:
+                            ws = c.get("workspace") or {}
+                            return {
+                                "id": c.get("address"),
+                                "workspace_id": ws.get("id") if isinstance(ws, dict) else None,
+                                "is_floating": bool(c.get("floating", False)),
+                                "is_focused": bool(c.get("focusHistoryID", 1) == 0),
+                            }
+        return None
+
+    def follow_window_to_active_workspace_sync(
+        self,
+        exact_title: str,
+        *,
+        focus: bool = False,
+    ) -> tuple[bool, bool]:
+        """
+        Keep a floating helper window (e.g. 'Capri Quick Ask') on the currently focused workspace
+        across Niri / Hyprland workspaces & monitors without stealing focus unless `focus=True`.
+        Returns `(window_found, moved_to_new_workspace)`.
+        """
+        k = self.kind
+        if k not in ("niri", "hyprland"):
+            return False, False
+        active_ws = self.get_focused_workspace_id_sync()
+        if active_ws is None:
+            return False, False
+        win = self.find_window_by_title_sync(exact_title)
+        if win is None or win.get("id") is None:
+            return False, False
+
+        wid = win["id"]
+        cur_ws = win.get("workspace_id")
+        moved = False
+        if cur_ws != active_ws:
+            moved = self.move_window_to_workspace_sync(
+                wid,
+                active_ws,
+                focus=focus,
+                use_id=(k == "niri"),
+            )
+            if not win.get("is_floating", True):
+                self.set_window_floating_sync(wid)
+        if focus and (moved or not win.get("is_focused", False)):
+            if k == "niri":
+                nid = _valid_niri_win_id(wid)
+                if nid is not None:
+                    _niri_socket_request({"Action": {"FocusWindow": {"id": nid}}})
+            elif k == "hyprland":
+                addr = _valid_hyprland_address(wid)
+                if addr is not None:
+                    _hyprland_socket_command(f"dispatch focuswindow address:{addr}")
+        return True, moved
 
     def move_floating_window_sync(self, win_id: Any, dx: int, dy: int) -> bool:
         """Move ONLY the floating window identified by `win_id` by relative logical delta (dx, dy)."""

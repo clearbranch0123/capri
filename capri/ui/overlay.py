@@ -1710,6 +1710,7 @@ class CapriAvatarWidget(QWidget):
     def _wire_quick_popover(self) -> None:
         p = self.quick_popover
         p.open_dashboard_requested.connect(self._open_relic_dashboard)
+        p.quick_ask_requested.connect(self._trigger_quick_ask_from_ui)
         p.voice_action_requested.connect(self._trigger_voice_from_ui)
         p.look_region_requested.connect(self._trigger_look_region_from_ui)
         p.pose_toggled.connect(self._toggle_quick_pose)
@@ -1747,6 +1748,16 @@ class CapriAvatarWidget(QWidget):
         self.dashboard.show()
         self.dashboard.raise_()
         self.dashboard.activateWindow()
+
+    def _trigger_quick_ask_from_ui(self) -> None:
+        from .client import send_cyberdeck_command
+
+        now = time.time()
+        self._last_interaction_ts = now
+        self.awareness.note_user_activity(now)
+        ok = send_cyberdeck_command("ask")
+        if not ok and self.reactions_enabled and not self.power_saver_active:
+            self._show_ephemeral_caption("Запусти Cyberdeck для быстрого вопроса.", ticks=160)
 
     def _trigger_voice_from_ui(self) -> None:
         from .client import send_cyberdeck_command

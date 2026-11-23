@@ -204,6 +204,21 @@ def _popover_qss() -> str:
             color: {P.coral_hover};
             border-color: {P.crimson_border};
         }}
+        QPushButton#popoverAskBtn {{
+            background-color: {P.crimson_soft};
+            color: {P.text_primary};
+            border: 1px solid {P.crimson_border};
+            border-radius: 9px;
+            padding: 7px 10px;
+            font-family: {T.sans};
+            font-size: 12px;
+            font-weight: 700;
+        }}
+        QPushButton#popoverAskBtn:hover {{
+            background-color: rgba(225, 45, 83, 0.28);
+            border-color: {P.crimson};
+            color: {P.text_on_accent};
+        }}
         QPushButton#popoverFooterBtn {{
             background-color: {P.surface_raised};
             color: {P.text_primary};
@@ -259,6 +274,7 @@ class CapriAvatarQuickPopover(QWidget):
     """Minimalist Crimson Graphite quick-control popover opened on avatar right-click."""
 
     open_dashboard_requested = Signal()
+    quick_ask_requested = Signal()
     voice_action_requested = Signal()
     look_region_requested = Signal()
     pose_toggled = Signal(str)           # "perch" | "lounge" | "dance" | "sleep"
@@ -379,6 +395,12 @@ class CapriAvatarQuickPopover(QWidget):
         lay.addWidget(div2)
 
         # ── 4. Quick Action Footer ──────────────────────────────────────────
+        self.btn_quick_ask = QPushButton("⚡ Быстрый вопрос", self.card)
+        self.btn_quick_ask.setObjectName("popoverAskBtn")
+        self.btn_quick_ask.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_quick_ask.setToolTip("Открыть компактную строку быстрого вопроса (capri-deck --ask)")
+        lay.addWidget(self.btn_quick_ask)
+
         quick_row = QHBoxLayout()
         quick_row.setSpacing(6)
         self.btn_voice = QPushButton("🎙 Голос", self.card)
@@ -415,6 +437,7 @@ class CapriAvatarQuickPopover(QWidget):
 
         # Wire signals: open Relic BEFORE hiding popover so Wayland hands focus cleanly
         self.btn_hud.clicked.connect(lambda: (self.open_dashboard_requested.emit(), self.hide()))
+        self.btn_quick_ask.clicked.connect(lambda: (self.quick_ask_requested.emit(), self.hide()))
         self.btn_voice.clicked.connect(lambda: (self.voice_action_requested.emit(), self.hide()))
         self.btn_look_region.clicked.connect(lambda: (self.look_region_requested.emit(), self.hide()))
         self.btn_close.clicked.connect(self.hide)

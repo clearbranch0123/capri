@@ -551,6 +551,11 @@ class SessionManager:
             row = con.execute("SELECT summary FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return (row["summary"] or "").strip() if row else ""
 
+    def get_session_compacted_seq(self, session_id: str) -> int:
+        with self._get_connection() as con:
+            row = con.execute("SELECT compacted_up_to_seq FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            return int(row["compacted_up_to_seq"] or 0) if row else 0
+
     def compact_session_if_needed(
         self,
         session_id: str,
@@ -596,14 +601,18 @@ class SessionManager:
             if existing_summary:
                 new_lines.extend(ln for ln in existing_summary.splitlines() if ln.strip())
 
+            from .memory import redact_memory_secrets
+
             new_max_seq = compacted_seq
             for r in to_fold:
                 seq_num = int(r["sequence"])
                 new_max_seq = max(new_max_seq, seq_num)
                 if (r["status"] or "") == "proactive" or (r["user_text"] or "").strip().startswith("[INITIATIVE //"):
                     continue
-                u_snip = re.sub(r"\s+", " ", (r["user_text"] or "").strip())[:95]
-                a_snip = re.sub(r"\s+", " ", (r["assistant_text"] or "").strip())[:110]
+                u_clean = redact_memory_secrets(re.sub(r"\s+", " ", (r["user_text"] or "").strip()))
+                a_clean = redact_memory_secrets(re.sub(r"\s+", " ", (r["assistant_text"] or "").strip()))
+                u_snip = u_clean[:95]
+                a_snip = a_clean[:110]
                 if not u_snip and not a_snip:
                     continue
                 bullet = f"• [#{seq_num}] Запрос: {u_snip}"
@@ -822,12 +831,28 @@ class SessionManager:
                 )
             return turns
 
-    def get_model_history(self, session_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+    def get_model_history(
+        self,
+        session_id: str,
+        limit: int = 500,
+        *,
+        skip_compacted: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Восстанавливает чистый массив сообщений для LLM (`agent.history`), исключая системный промпт.
         Загружает последние limit раундов диалога в хронологическом порядке.
+        При `skip_compacted=True` пропускает уже свёрнутые в `sessions.summary` раунды (`sequence <= compacted_up_to_seq`),
+        сохраняя дословно свежий хвост диалога и экономя контекстные токены.
         """
         turns = self.get_recent_turns(session_id, limit=limit)
+        if skip_compacted and turns:
+            comp_seq = self.get_session_compacted_seq(session_id)
+            if comp_seq > 0:
+                uncompacted = [t for t in turns if int(t.sequence) > comp_seq]
+                if uncompacted:
+                    turns = uncompacted
+                else:
+                    turns = turns[-COMPACT_KEEP_RECENT_TURNS:]
         history: List[Dict[str, Any]] = []
         for t in turns:
             if t.model_messages:
@@ -984,11 +1009,22 @@ class SessionManager:
                 else ""
             )
 
+            s_comp = con.execute(
+                "SELECT compacted_up_to_seq FROM sessions WHERE id = ?",
+                (turn.session_id,),
+            ).fetchone()
+            comp_seq = int(s_comp["compacted_up_to_seq"] or 0) if s_comp else 0
             now = time.time()
-            con.execute(
-                "UPDATE sessions SET turn_count = ?, preview = ?, updated_at = ? WHERE id = ?",
-                (new_count, new_preview, now, turn.session_id),
-            )
+            if int(turn.sequence) <= comp_seq:
+                con.execute(
+                    "UPDATE sessions SET turn_count = ?, preview = ?, updated_at = ?, summary = '', compacted_up_to_seq = 0 WHERE id = ?",
+                    (new_count, new_preview, now, turn.session_id),
+                )
+            else:
+                con.execute(
+                    "UPDATE sessions SET turn_count = ?, preview = ?, updated_at = ? WHERE id = ?",
+                    (new_count, new_preview, now, turn.session_id),
+                )
             con.commit()
             return True
 

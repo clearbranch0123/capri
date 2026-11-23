@@ -4469,6 +4469,22 @@ class CapriCyberdeckWindow(QWidget):
         self.btn_relic_hud.clicked.connect(self._open_relic_dashboard)
         top_bar.addWidget(self.btn_relic_hud)
 
+        self.btn_quick_ask = QPushButton("⚡")
+        self.btn_quick_ask.setFixedSize(32, 32)
+        self.btn_quick_ask.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_quick_ask.setToolTip("Быстрый вопрос — компактный мини-бар (capri-deck --ask)")
+        self.btn_quick_ask.setStyleSheet(
+            button_ghost_qss(
+                text_color=COLORS.crimson,
+                hover_text=COLORS.text_primary,
+                hover_bg=COLORS.crimson_soft,
+                padding="0px",
+                radius=8,
+            )
+        )
+        self.btn_quick_ask.clicked.connect(self._toggle_quick_ask)
+        top_bar.addWidget(self.btn_quick_ask)
+
         # Compatibility hidden version button (accessible in sidebar & overflow menu)
         self.btn_ver = QPushButton(f"v{__version__}")
         self.btn_ver.setVisible(False)
@@ -5999,6 +6015,10 @@ class CapriCyberdeckWindow(QWidget):
             pass
         if hasattr(self, "wake_listener") and self.wake_listener:
             self.wake_listener.resume()
+        if not silent:
+            qa = self._active_quick_ask()
+            if qa is not None:
+                qa.mark_cancelled()
         if hasattr(self, "current_response_card") and self.current_response_card:
             if not silent:
                 self.current_response_card.set_text("[Генерация ответа и речь Капри остановлены пользователем]")
@@ -6077,21 +6097,32 @@ class CapriCyberdeckWindow(QWidget):
                 return
         super().keyPressEvent(event)
 
-    def _send_message(self):
+    def _send_message(
+        self,
+        _checked: bool = False,
+        *,
+        override_text: Optional[str] = None,
+        override_attachments: Optional[list] = None,
+    ):
         if self._is_generating():
             self._stop_generation(silent=True)
 
-        text = self.input_field.text().strip()
-        pending_attachments = self.attachment_strip.attachments() if hasattr(self, "attachment_strip") else []
+        if override_text is not None or override_attachments is not None:
+            text = (override_text or "").strip()
+            pending_attachments = list(override_attachments or [])
+        else:
+            text = self.input_field.text().strip()
+            pending_attachments = self.attachment_strip.attachments() if hasattr(self, "attachment_strip") else []
+            self.input_field.clear()
+            if hasattr(self, "attachment_strip") and self.attachment_strip:
+                self.attachment_strip.clear()
+
         if not text and not pending_attachments:
             if not self._is_generating():
                 self.visualizer.set_state("idle")
                 notify_avatar("idle")
             return
 
-        self.input_field.clear()
-        if hasattr(self, "attachment_strip") and self.attachment_strip:
-            self.attachment_strip.clear()
         play_ui_sound("ui_click")
         if hasattr(self, "agent") and hasattr(self.agent, "initiative_engine") and self.agent.initiative_engine:
             self.agent.initiative_engine.record_user_activity()
@@ -6105,6 +6136,9 @@ class CapriCyberdeckWindow(QWidget):
                 self.visualizer.set_state("idle")
                 notify_avatar("idle")
             self._handle_command(text)
+            qa = self._active_quick_ask()
+            if qa is not None:
+                qa.set_final_text(f"Команда {text.split()[0]} выполнена. Открой Cyberdeck для подробностей.")
             return
 
         # Spatial Presence quick phrases
@@ -6307,6 +6341,9 @@ class CapriCyberdeckWindow(QWidget):
         self.current_response_card.set_text(text)
         if near_bottom:
             self._scroll_to_bottom()
+        qa = self._active_quick_ask()
+        if qa is not None:
+            qa.set_streaming_text(text)
 
     def _on_tool_approval_requested(self, payload):
         req, ev, box = payload
@@ -6324,6 +6361,34 @@ class CapriCyberdeckWindow(QWidget):
 
         if cmd in ("/exit", "/quit"):
             self._quit_application()
+            return
+
+        if cmd == "/recall":
+            query = text[len(parts[0]):].strip()
+            if not query:
+                self._append_message("Система", "Использование: `/recall <запрос>` — поиск по памяти и прошлым сессиям.")
+                return
+            from ..core.memory import redact_memory_secrets
+            mem_hits = self.agent.memory_store.search_hybrid(query, limit=5) if hasattr(self.agent, "memory_store") else []
+            turn_hits = (
+                self.agent.session_manager.search_turns_hybrid(query, limit=5)
+                if hasattr(self.agent, "session_manager")
+                else []
+            )
+            lines = [f"### 🔎 Recall по запросу «{query}»"]
+            if mem_hits:
+                lines.append("\n**Факты памяти:**")
+                for m in mem_hits:
+                    lines.append(f"- `{m.key}` ({m.category}): {m.fact}")
+            if turn_hits:
+                lines.append("\n**Прошлые диалоги:**")
+                for th in turn_hits:
+                    u_s = redact_memory_secrets((th.get("user_text") or "").replace("\n", " ").strip())[:100]
+                    a_s = redact_memory_secrets((th.get("assistant_text") or "").replace("\n", " ").strip())[:120]
+                    lines.append(f"- **{th.get('session_title', 'Диалог')}** (#{th.get('sequence', '?')}): {u_s} → {a_s}")
+            if not mem_hits and not turn_hits:
+                lines.append("\nНичего релевантного в памяти и прошлых сессиях не найдено.")
+            self._append_message("Система", "\n".join(lines))
             return
 
         if cmd in ("/clear", "/cls"):
@@ -7080,12 +7145,22 @@ class CapriCyberdeckWindow(QWidget):
             return
 
         if cmd in ("/wm-rules", "/wmrules", "/wm"):
+            import shlex
             from ..core.wm_rules import install_wm_rules
+
+            try:
+                wm_tokens = shlex.split(text)[1:]
+            except ValueError:
+                wm_tokens = parts[1:]
 
             target_wm = None
             apply_now = False
             include_hotkey = True
-            for tok in parts[1:]:
+            toggle_hk = None
+            ask_hk = None
+            i = 0
+            while i < len(wm_tokens):
+                tok = wm_tokens[i]
                 tl = tok.lower()
                 if tl in ("niri", "hyprland"):
                     target_wm = tl
@@ -7093,7 +7168,24 @@ class CapriCyberdeckWindow(QWidget):
                     apply_now = True
                 elif tl in ("--no-hotkey", "no-hotkey"):
                     include_hotkey = False
-            res = install_wm_rules(target_wm, dry_run=not apply_now, include_hotkey=include_hotkey)
+                elif tl == "--toggle-hotkey" and i + 1 < len(wm_tokens):
+                    toggle_hk = wm_tokens[i + 1]
+                    i += 1
+                elif tl.startswith("--toggle-hotkey="):
+                    toggle_hk = tok.split("=", 1)[1]
+                elif tl == "--ask-hotkey" and i + 1 < len(wm_tokens):
+                    ask_hk = wm_tokens[i + 1]
+                    i += 1
+                elif tl.startswith("--ask-hotkey="):
+                    ask_hk = tok.split("=", 1)[1]
+                i += 1
+            res = install_wm_rules(
+                target_wm,
+                dry_run=not apply_now,
+                include_hotkey=include_hotkey,
+                toggle_hotkey=toggle_hk,
+                ask_hotkey=ask_hk,
+            )
             lang = "kdl" if res.wm == "niri" else "ini"
             if apply_now:
                 self._append_message("Система", res.message)
@@ -7363,6 +7455,9 @@ class CapriCyberdeckWindow(QWidget):
         kind_l = (kind or "start").strip().lower()
         if kind_l != "result":
             self.current_tools_log.append(info)
+            qa = self._active_quick_ask()
+            if qa is not None:
+                qa.set_tool_activity(info)
         if hasattr(self, "current_response_card") and self.current_response_card:
             self.current_response_card.add_tool_info(info, kind=kind_l)
             self._scroll_to_bottom()
@@ -7460,6 +7555,9 @@ class CapriCyberdeckWindow(QWidget):
             self._append_message("Капри", final_text, thought=self.current_thought_text, tools=self.current_tools_log)
         self.refresh_stats()
         self._attach_turn_metadata_to_live_cards()
+        qa = self._active_quick_ask()
+        if qa is not None:
+            qa.set_final_text(final_text)
 
     def _on_cancelled(self):
         self._stream_flush_timer.stop()
@@ -7477,6 +7575,9 @@ class CapriCyberdeckWindow(QWidget):
         self.current_response_card = None
         self._response_has_content = False
         self.current_user_card = None
+        qa = self._active_quick_ask()
+        if qa is not None:
+            qa.mark_cancelled()
 
     def _on_speech_finished(self):
         self._stop_barge_in_monitor()
@@ -7500,6 +7601,9 @@ class CapriCyberdeckWindow(QWidget):
         self.current_response_card = None
         self._response_has_content = False
         self.current_user_card = None
+        qa = self._active_quick_ask()
+        if qa is not None:
+            qa.mark_finished()
 
     def _attach_turn_metadata_to_live_cards(self):
         try:
@@ -7605,6 +7709,9 @@ class CapriCyberdeckWindow(QWidget):
         self.current_response_card = None
         if hasattr(self, "wake_listener") and self.wake_listener:
             self.wake_listener.resume()
+        qa = self._active_quick_ask()
+        if qa is not None:
+            qa.set_error_text(f"Ошибка: {err}")
 
     def _trigger_vision(self):
         self.input_field.setText("Капри, глянь на экран и опиши, что ты видишь.")
@@ -7645,19 +7752,78 @@ class CapriCyberdeckWindow(QWidget):
         if rw.isFinished():
             _ACTIVE_QTHREADS.discard(rw)
 
+    def _active_quick_ask(self):
+        """Return Quick Ask Bar when visible OR tracking an in-flight response (even if hidden mid-answer)."""
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is not None and (qa.isVisible() or getattr(qa, "_generating", False)):
+            return qa
+        return None
+
+    def _ensure_quick_ask_bar(self):
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is None:
+            from .quick_ask import CapriQuickAskBar
+            qa = CapriQuickAskBar(None)
+            qa.submit_requested.connect(self._on_quick_ask_submit)
+            qa.stop_requested.connect(lambda: self._stop_generation(silent=False))
+            qa.voice_toggle_requested.connect(self._toggle_voice_input)
+            qa.look_region_requested.connect(self._on_quick_ask_look_region)
+            qa.open_cyberdeck_requested.connect(self._show_and_raise)
+            self._quick_ask_bar = qa
+        return qa
+
+    def _toggle_quick_ask(self):
+        qa = self._ensure_quick_ask_bar()
+        if qa.isVisible():
+            if qa.is_on_other_workspace():
+                qa.summon_to_active_workspace()
+                qa.open_and_focus()
+            else:
+                qa.dismiss()
+        else:
+            qa.open_and_focus()
+            if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                QTimer.singleShot(60, qa.summon_to_active_workspace)
+
+    def _on_quick_ask_submit(self, text: str, attachments: list):
+        self._send_message(override_text=text, override_attachments=attachments)
+
+    def _on_quick_ask_look_region(self):
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is not None and qa.isVisible():
+            qa.hide()
+        self._region_capture_target = "quick_ask"
+        self._trigger_look_region()
+
     def _on_region_captured(self, tmp_path: str, status: str):
         rw = getattr(self, "_region_capture_worker", None)
         if rw is not None:
             rw.claim_pending_path()
         self._region_capture_worker = None
+        target = getattr(self, "_region_capture_target", "cyberdeck")
+        self._region_capture_target = "cyberdeck"
         if status == "cancelled":
+            if target == "quick_ask":
+                qa = getattr(self, "_quick_ask_bar", None)
+                if qa is not None:
+                    qa.open_and_focus()
             return
         if status == "missing_tools":
             notify_avatar("playful", "Установи slurp и grim для захвата области.")
-            self._append_message("Система", "Для захвата области экрана нужны утилиты Wayland: `slurp` и `grim`.")
+            if target == "quick_ask":
+                qa = self._ensure_quick_ask_bar()
+                qa.open_and_focus()
+                qa.set_error_text("Для захвата области экрана нужны утилиты Wayland: slurp и grim.")
+            else:
+                self._append_message("Система", "Для захвата области экрана нужны утилиты Wayland: `slurp` и `grim`.")
             return
         if status != "ok" or not tmp_path or not os.path.exists(tmp_path):
-            self._append_message("Система", "Не удалось захватить выбранную область экрана.")
+            if target == "quick_ask":
+                qa = self._ensure_quick_ask_bar()
+                qa.open_and_focus()
+                qa.set_error_text("Не удалось захватить выбранную область экрана.")
+            else:
+                self._append_message("Система", "Не удалось захватить выбранную область экрана.")
             return
 
         from ..core.attachments import cleanup_temp_attachment, save_clipboard_image_bytes
@@ -7674,13 +7840,34 @@ class CapriCyberdeckWindow(QWidget):
                 pass
 
         if not raw_bytes:
-            self._append_message("Система", "Захваченное изображение оказалось пустым.")
+            if target == "quick_ask":
+                qa = self._ensure_quick_ask_bar()
+                qa.open_and_focus()
+                qa.set_error_text("Захваченное изображение оказалось пустым.")
+            else:
+                self._append_message("Система", "Захваченное изображение оказалось пустым.")
             return
 
         try:
             att = save_clipboard_image_bytes(raw_bytes)
         except ValueError as e:
-            self._append_message("Система", f"Скриншот области отклонён: {e}")
+            if target == "quick_ask":
+                qa = self._ensure_quick_ask_bar()
+                qa.open_and_focus()
+                qa.set_error_text(f"Скриншот области отклонён: {e}")
+            else:
+                self._append_message("Система", f"Скриншот области отклонён: {e}")
+            return
+
+        if target == "quick_ask":
+            qa = self._ensure_quick_ask_bar()
+            if not qa.add_attachment(att):
+                cleanup_temp_attachment(att)
+                qa.open_and_focus()
+                qa.set_error_text("Достигнут лимит вложений (максимум 6 на сообщение).")
+                return
+            play_ui_sound("ui_click")
+            qa.open_and_focus()
             return
 
         if not self.attachment_strip.add_attachment(att):
@@ -7701,6 +7888,9 @@ class CapriCyberdeckWindow(QWidget):
         self.visualizer.set_state("listening")
         notify_avatar("listening", "Слушаю...")
         self._set_mic_button_recording_state()
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is not None and qa.isVisible():
+            qa.set_voice_recording(True)
 
         if hasattr(self, "wake_listener") and self.wake_listener:
             self.wake_listener.pause()
@@ -7717,6 +7907,11 @@ class CapriCyberdeckWindow(QWidget):
         if not clean:
             self.visualizer.set_state("idle")
             notify_avatar("idle")
+            return
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is not None and qa.isVisible():
+            qa.begin_generation()
+            self._send_message(override_text=clean, override_attachments=qa.take_attachments())
             return
         self.input_field.setText(clean)
         self._send_message()
@@ -7747,6 +7942,9 @@ class CapriCyberdeckWindow(QWidget):
         if not self._is_generating():
             self.visualizer.set_state("idle")
             notify_avatar("idle")
+        qa = getattr(self, "_quick_ask_bar", None)
+        if qa is not None:
+            qa.set_voice_recording(False)
 
     def _start_wake_listener(self) -> bool:
         try:
@@ -7827,6 +8025,9 @@ class CapriCyberdeckWindow(QWidget):
 
         menu = QMenu()
         menu.setStyleSheet(menu_qss())
+
+        act_ask = menu.addAction("⚡ Быстрый вопрос (Quick Ask)")
+        act_ask.triggered.connect(self._toggle_quick_ask)
 
         act_toggle = menu.addAction("Показать / скрыть Cyberdeck")
         act_toggle.triggered.connect(self._toggle_window_visibility)
@@ -7941,6 +8142,8 @@ class CapriCyberdeckWindow(QWidget):
                 self._stop_generation(silent=True)
             elif cmd == "look_region":
                 self._trigger_look_region()
+            elif cmd == "ask":
+                self._toggle_quick_ask()
             elif cmd == "quit":
                 QTimer.singleShot(0, self._quit_application)
             try:
@@ -7975,6 +8178,13 @@ class CapriCyberdeckWindow(QWidget):
                 pass
         self._cancel_mcp_connect_worker(wait_ms=2500)
         self._cancel_region_capture_worker(wait_ms=1000)
+        qa = getattr(self, "_quick_ask_bar", None)
+        self._quick_ask_bar = None
+        if qa is not None:
+            try:
+                qa.close()
+            except Exception:
+                pass
         if hasattr(self, "agent") and self.agent and getattr(self.agent, "mcp_manager", None):
             try:
                 self.agent.mcp_manager.shutdown_sync()
@@ -8201,15 +8411,20 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
     if any(a in ("--help", "-h") for a in args):
         print(
             f"Capri Cyberdeck v{__version__} — PySide6 Desktop Companion GUI\n"
-            "Usage: capri-deck [--toggle | --show | --hide | --look-region | --quit] [--version] [--help]"
+            "Usage: capri-deck [--toggle | --ask | --show | --hide | --look-region | --quit] [--version] [--help]"
         )
         return 0
 
     # Native Wayland global-hotkey / single-instance IPC (Niri & Hyprland)
     auto_look_region = False
+    auto_quick_ask = False
     if "--toggle" in args:
         if send_cyberdeck_ipc("toggle"):
             return 0
+    elif "--ask" in args:
+        if send_cyberdeck_ipc("ask"):
+            return 0
+        auto_quick_ask = True
     elif "--show" in args:
         if send_cyberdeck_ipc("show"):
             return 0
@@ -8232,9 +8447,13 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
     apply_dark_palette(app)
     app.setQuitOnLastWindowClosed(False)
     window = CapriCyberdeckWindow()
-    window.show()
-    if auto_look_region:
-        QTimer.singleShot(350, window._trigger_look_region)
+    if auto_quick_ask:
+        window.hide()
+        QTimer.singleShot(120, window._toggle_quick_ask)
+    else:
+        window.show()
+        if auto_look_region:
+            QTimer.singleShot(350, window._trigger_look_region)
     sys.exit(app.exec())
 
 

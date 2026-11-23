@@ -976,14 +976,30 @@ def cli_main(argv=None):
         from capri.core.wm_rules import install_wm_rules
 
         target_wm = None
+        toggle_hk = None
+        ask_hk = None
         for idx, tok in enumerate(args):
             if tok in ("--wm", "-w") and idx + 1 < len(args):
                 target_wm = args[idx + 1]
+            elif tok == "--toggle-hotkey" and idx + 1 < len(args):
+                toggle_hk = args[idx + 1]
+            elif tok.startswith("--toggle-hotkey="):
+                toggle_hk = tok.split("=", 1)[1]
+            elif tok == "--ask-hotkey" and idx + 1 < len(args):
+                ask_hk = args[idx + 1]
+            elif tok.startswith("--ask-hotkey="):
+                ask_hk = tok.split("=", 1)[1]
             elif tok.lower() in ("niri", "hyprland"):
                 target_wm = tok.lower()
         apply_flag = any(a in ("--apply", "-a") for a in args)
         no_hotkey = "--no-hotkey" in args
-        res = install_wm_rules(target_wm, dry_run=not apply_flag, include_hotkey=not no_hotkey)
+        res = install_wm_rules(
+            target_wm,
+            dry_run=not apply_flag,
+            include_hotkey=not no_hotkey,
+            toggle_hotkey=toggle_hk,
+            ask_hotkey=ask_hk,
+        )
         print(res.message)
         if not apply_flag:
             print("\n" + res.snippet)

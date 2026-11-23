@@ -75,6 +75,93 @@ def contains_secret_or_sensitive_memory(text: str) -> bool:
     return False
 
 
+_SECRET_KEYWORD_EN_RU = (
+    r"(?:password|passwd|passphrase|pin[\s-]?code|api[\s_-]?key|secret[\s_-]?key|"
+    r"access[\s_-]?token|refresh[\s_-]?token|auth[\s_-]?token|bot[\s_-]?token|token|"
+    r"recovery[\s-]?code|seed[\s-]?phrase|"
+    r"парол(?:ь|я|ю|ем|е)|пин[\s-]?код\w*|кодов(?:ое|ого)\s+слово|токен\w*|"
+    r"секретн(?:ый|ого|ая|ую|ом|ые)\s+(?:ключ|код|токен)\w*|апи[\s-]?ключ\w*|api[\s-]?ключ\w*|"
+    r"ключ\s+доступа|сид[\s-]?фраз\w*)"
+)
+
+# Strict inline secret-value redaction patterns (preserves normal paths/text while scrubbing secrets)
+_INLINE_SECRET_REDACT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:sk|sk_live|sk_test|gsk|ghp|gho|ghu|ghs|ghr|github_pat|glpat|hf)[_-][A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{12,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{10,}", re.IGNORECASE),
+    re.compile(r"-----BEGIN\s+(?:RSA|DSA|EC|OPENSSH|PGP)?\s*PRIVATE\s+KEY-----[\s\S]*?(?:-----END[^-]+-----|$)", re.IGNORECASE),
+    re.compile(r"(https?://)[^/\s:@\"'<>]+:[^/\s@\"'<>]+@", re.IGNORECASE),
+    re.compile(r"([?&](?:api[_-]?key|key|token|access[_-]?token|secret|auth|password|passwd|sig)=)[^&\s\"'#<>]+", re.IGNORECASE),
+    re.compile(r"\b(?:\d{4}[-\s]){3}\d{4}\b"),
+    # Quoted multi-word secrets/passphrases after keyword ("my passphrase is 'correct horse battery staple'")
+    re.compile(
+        rf"(\b{_SECRET_KEYWORD_EN_RU}\b"
+        r"(?:\s+(?:for|to|of|от|для|к|на)\s+[\w.\-]{1,28}){0,2}"
+        r"\s*(?:(?:is|was|are|это|равен)\s+|[:=—–\-]\s*))"
+        r"(?:'[^'\n]+'|"
+        r'"[^"\n]+"|'
+        r"\u00ab[^\u00bb\n]+\u00bb|"
+        r"`[^`\n]+`)",
+        re.IGNORECASE | re.UNICODE,
+    ),
+    # Strict key=value assignments (e.g. `password=supersecret123`, `API_KEY=xyz`)
+    re.compile(
+        r"((?:^|[\s,;])(?:[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|PIN|PASS|CREDENTIAL)[A-Z0-9_]*|парол[ья]|токен|пин)=)\S+",
+        re.IGNORECASE | re.UNICODE,
+    ),
+    # Natural-language EN/RU secret phrasing -> scrub ENTIRE rest of clause/sentence (blocks multi-word & negations!)
+    re.compile(
+        rf"(\b{_SECRET_KEYWORD_EN_RU}\b"
+        r"(?:\s+(?:for|to|of|от|для|к|на)\s+[\w.\-]{1,28}){0,2}"
+        r"\s*(?:(?:is|was|are|это|равен)\s+|[:—–\-]\s*|\s+=\s+))[^\n.;!?]+",
+        re.IGNORECASE | re.UNICODE,
+    ),
+)
+
+_ALREADY_REDACTED_PHRASE_RE = re.compile(
+    rf"\b(?:{_SECRET_KEYWORD_EN_RU}|[A-Z0-9_]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|PIN|PASS|CREDENTIAL)[A-Z0-9_]*)"
+    r"(?:\s+(?:for|to|of|от|для|к|на)\s+[\w.\-]{1,28}){0,2}"
+    r"\s*(?:(?:is|was|are|это|равен)\s+|[:=—–\-]\s*)?\[REDACTED\]",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def redact_memory_secrets(text: str) -> str:
+    """
+    Scrub API keys, JWTs, credentials, key=value secrets, and natural-language EN/RU password/token
+    phrases while preserving normal text & paths. Fail-closed: if any unredacted secret phrase
+    still matches `contains_secret_or_sensitive_memory()`, masks that clause to `[REDACTED]`.
+    """
+    if not text:
+        return ""
+    cleaned = text
+    for pat in _INLINE_SECRET_REDACT_PATTERNS:
+        if pat.groups >= 1:
+            cleaned = pat.sub(r"\1[REDACTED]", cleaned)
+        else:
+            cleaned = pat.sub("[REDACTED]", cleaned)
+
+    # Fail-closed residual check per clause (catches bare phrasing like "мой пароль hunter2" with no separator)
+    residual = _ALREADY_REDACTED_PHRASE_RE.sub("", cleaned)
+    if contains_secret_or_sensitive_memory(residual):
+        clauses = re.split(r"([.!?\n;]+)", cleaned)
+        safe_parts: list[str] = []
+        for idx, part in enumerate(clauses):
+            if idx % 2 == 1:
+                safe_parts.append(part)
+                continue
+            part_res = _ALREADY_REDACTED_PHRASE_RE.sub("", part)
+            if contains_secret_or_sensitive_memory(part_res):
+                safe_parts.append("[REDACTED]")
+            else:
+                safe_parts.append(part)
+        cleaned = "".join(safe_parts)
+    return cleaned
+
+
 def memory_payload_contains_secret(
     key: str,
     fact: str,
@@ -130,6 +217,57 @@ def _char_trigrams(text: str) -> set[str]:
     if len(clean) < 3:
         return {clean} if clean else set()
     return {clean[i : i + 3] for i in range(len(clean) - 2)}
+
+
+# Compact bidirectional RU<->EN tech & everyday alias groups for associative recall
+_BILINGUAL_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("python", "питон", "пайтон", "py"),
+    ("linux", "линукс", "пингвин"),
+    ("arch", "арч", "cachyos", "кэшиос"),
+    ("fedora", "федора"),
+    ("wayland", "вайланд", "вэйланд"),
+    ("niri", "нири"),
+    ("hyprland", "гипрленд", "хайпрленд"),
+    ("pipewire", "пайпвайр", "звук", "аудио", "audio"),
+    ("gpu", "видяха", "видеокарта", "графика", "nvidia", "radeon", "amd"),
+    ("cpu", "проц", "процессор"),
+    ("ram", "озу", "оперативка", "оперативная"),
+    ("keyboard", "клава", "клавиатура", "механика"),
+    ("mouse", "мышь", "мышка"),
+    ("mic", "microphone", "микро", "микрофон"),
+    ("monitor", "display", "screen", "монитор", "экран", "дисплей"),
+    ("browser", "браузер", "chromium", "хромиум", "firefox"),
+    ("terminal", "shell", "консоль", "терминал", "баш", "zsh"),
+    ("git", "гит", "github", "гитхаб", "репо", "репозиторий"),
+    ("docker", "докер", "контейнер"),
+    ("rust", "раст", "cargo"),
+    ("code", "код", "программирование", "разработка", "dev"),
+    ("game", "games", "gaming", "игра", "игры", "гейминг"),
+    ("music", "track", "музыка", "трек", "плейлист"),
+    ("voice", "tts", "stt", "голос", "озвучка", "речь"),
+    ("avatar", "аватар", "моделька", "спрайт"),
+    ("server", "сервер", "хост", "vps"),
+    ("editor", "ide", "редактор", "neovim", "vim", "vscode"),
+    ("coffee", "кофе", "чай", "tea"),
+)
+
+_SYNONYM_STEM_MAP: dict[str, frozenset[str]] = {}
+for _grp in _BILINGUAL_SYNONYM_GROUPS:
+    _stems = frozenset(_stem_token(w) for w in _grp if len(w) >= 2)
+    for _st in _stems:
+        _prev = _SYNONYM_STEM_MAP.get(_st, frozenset())
+        _SYNONYM_STEM_MAP[_st] = _prev | (_stems - {_st})
+
+
+def _expand_bilingual_stems(stems: list[str]) -> set[str]:
+    """Return cross-language/synonym stems associated with the given query stems."""
+    expanded: set[str] = set()
+    for st in stems:
+        al = _SYNONYM_STEM_MAP.get(st)
+        if al:
+            expanded.update(al)
+    expanded.difference_update(stems)
+    return expanded
 
 CATEGORIES = (
     "general",       # Общие факты
@@ -745,6 +883,12 @@ class MemoryStore:
         q_tokens: list[str],
         q_stems: list[str],
         q_trigrams: set[str],
+        *,
+        q_synonym_stems: Optional[set[str]] = None,
+        doc_tokens: Optional[list[str]] = None,
+        doc_stems: Optional[list[str]] = None,
+        idf_map: Optional[dict[str, float]] = None,
+        avg_dl: float = 12.0,
     ) -> float:
         key_l = entry.key.casefold()
         fact_l = entry.fact.casefold()
@@ -760,19 +904,55 @@ class MemoryStore:
         if any(q_raw in t for t in tags_l):
             score += 4.0
 
-        # 2. Token & stem overlap (handles Russian/English inflections and multi-word queries)
-        doc_tokens = _tokenize_hybrid(haystack)
+        # 2. BM25 (IDF + length-normalized TF) & stem overlap over tokens
+        if doc_tokens is None:
+            doc_tokens = _tokenize_hybrid(haystack)
+        if doc_stems is None:
+            doc_stems = [_stem_token(t) for t in doc_tokens]
+
         doc_token_set = set(doc_tokens)
-        doc_stem_set = {_stem_token(t) for t in doc_tokens}
+        doc_stem_counts: dict[str, int] = {}
+        for ds in doc_stems:
+            doc_stem_counts[ds] = doc_stem_counts.get(ds, 0) + 1
+        doc_stem_set = set(doc_stem_counts.keys())
+
+        dl = max(1.0, float(len(doc_stems)))
+        avgdl = max(1.0, float(avg_dl))
+        k1 = 1.2
+        b = 0.75
+
         if q_tokens:
             exact_hits = sum(1 for t in q_tokens if t in doc_token_set)
-            stem_hits = sum(
-                1
-                for st in q_stems
-                if any(ds.startswith(st) or st.startswith(ds) for ds in doc_stem_set if len(ds) >= 3 and len(st) >= 3)
-            )
-            score += (exact_hits / len(q_tokens)) * 4.0
-            score += (stem_hits / len(q_tokens)) * 2.8
+            score += (exact_hits / len(q_tokens)) * 3.2
+
+            bm25_sum = 0.0
+            for st in q_stems:
+                tf = doc_stem_counts.get(st, 0)
+                if tf == 0 and len(st) >= 3:
+                    # Prefix-stem match for irregular inflections
+                    for ds, cnt in doc_stem_counts.items():
+                        if len(ds) >= 3 and (ds.startswith(st) or st.startswith(ds)):
+                            tf += cnt
+                if tf > 0:
+                    idf = idf_map.get(st, 1.0) if idf_map else 1.0
+                    denom = tf + k1 * (1.0 - b + b * (dl / avgdl))
+                    bm25_sum += idf * ((tf * (k1 + 1.0)) / max(1e-6, denom))
+            score += bm25_sum * 2.2
+
+        # 2b. Bilingual RU<->EN synonym recall (slightly lower weight than direct hits)
+        if q_synonym_stems:
+            syn_score = 0.0
+            for syn in q_synonym_stems:
+                tf = doc_stem_counts.get(syn, 0)
+                if tf == 0 and len(syn) >= 3:
+                    for ds, cnt in doc_stem_counts.items():
+                        if len(ds) >= 3 and (ds.startswith(syn) or syn.startswith(ds)):
+                            tf += cnt
+                if tf > 0:
+                    idf = idf_map.get(syn, 1.0) if idf_map else 1.0
+                    denom = tf + k1 * (1.0 - b + b * (dl / avgdl))
+                    syn_score += 0.72 * idf * ((tf * (k1 + 1.0)) / max(1e-6, denom))
+            score += min(4.5, syn_score * 1.9)
 
         # 3. Character 3-gram similarity (fuzzy resilience against typos)
         if q_trigrams and len(q_raw) >= 4:
@@ -818,11 +998,45 @@ class MemoryStore:
 
             q_tokens = _tokenize_hybrid(q)
             q_stems = [_stem_token(t) for t in q_tokens]
+            q_syn_stems = _expand_bilingual_stems(q_stems)
             q_tri = _char_trigrams(q)
 
-            scored: list[tuple[float, int, float, MemoryEntry]] = []
+            # Build corpus DF/IDF & average document length across candidate entries for true BM25
+            doc_token_lists: list[list[str]] = []
+            doc_stem_lists: list[list[str]] = []
+            df: dict[str, int] = {}
+            total_len = 0
             for entry in candidates:
-                sc = self._score_entry(entry, q, q_tokens, q_stems, q_tri)
+                haystack = f"{entry.key.casefold()} {entry.fact.casefold()} {' '.join(t.casefold() for t in entry.tags)}"
+                dt = _tokenize_hybrid(haystack)
+                ds = [_stem_token(t) for t in dt]
+                doc_token_lists.append(dt)
+                doc_stem_lists.append(ds)
+                total_len += max(1, len(ds))
+                for unique_st in set(ds):
+                    df[unique_st] = df.get(unique_st, 0) + 1
+
+            n_docs = max(1, len(candidates))
+            avg_dl = total_len / float(n_docs)
+            idf_map = {
+                st: math.log(1.0 + (n_docs - freq + 0.5) / (freq + 0.5))
+                for st, freq in df.items()
+            }
+
+            scored: list[tuple[float, int, float, MemoryEntry]] = []
+            for entry, dt, ds in zip(candidates, doc_token_lists, doc_stem_lists):
+                sc = self._score_entry(
+                    entry,
+                    q,
+                    q_tokens,
+                    q_stems,
+                    q_tri,
+                    q_synonym_stems=q_syn_stems,
+                    doc_tokens=dt,
+                    doc_stems=ds,
+                    idf_map=idf_map,
+                    avg_dl=avg_dl,
+                )
                 if sc > 0.0:
                     scored.append((sc, entry.importance, entry.updated_at, entry))
 
@@ -834,11 +1048,26 @@ class MemoryStore:
         query: str,
         limit: int = 6,
         category: Optional[str] = None,
+        *,
+        record_access: bool = False,
     ) -> List[MemoryEntry]:
-        """Associative hybrid recall (substring + stem + fuzzy trigram + importance + recency)."""
+        """Associative hybrid recall (BM25 IDF + stem + RU<->EN synonyms + fuzzy trigram + importance/recency)."""
         if not (query or "").strip():
             return []
-        return self.search(query=query, category=category)[: max(1, limit)]
+        hits = self.search(query=query, category=category)[: max(1, limit)]
+        if record_access and hits:
+            now = time.time()
+            with self._lock:
+                changed = False
+                for h in hits:
+                    ent = self.entries.get(h.key)
+                    if ent is not None:
+                        ent.access_count += 1
+                        ent.last_accessed = now
+                        changed = True
+                if changed:
+                    self.save()
+        return hits
 
     def get_prompt_context(self, max_tokens_budget: int = 350, user_name: str = "User") -> str:
         """
