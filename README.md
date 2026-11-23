@@ -94,7 +94,7 @@ git pull
 ### Глобальные хоткеи Wayland (Niri / Hyprland)
 - **Niri (`~/.config/niri/config.kdl`):**
   - `Mod+Shift+C { spawn "capri-deck" "--toggle"; }` *(открыть / скрыть Cyberdeck)*
-  - `Mod+Shift+X { spawn "capri-deck" "--look-region"; }` *(выделить область экрана `slurp + grim` и сразу спросить Капри)*
+  - `Mod+Shift+X { spawn "capri-deck" "--look-region"; }` *(выделить область экрана `slurp + grim` и прикрепить в поле ввода Cyberdeck)*
 - **Hyprland (`~/.config/hypr/hyprland.conf`):**
   - `bind = SUPER SHIFT, C, exec, capri-deck --toggle`
   - `bind = SUPER SHIFT, X, exec, capri-deck --look-region`

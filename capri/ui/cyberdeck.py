@@ -7611,7 +7611,7 @@ class CapriCyberdeckWindow(QWidget):
         self._send_message()
 
     def _trigger_look_region(self):
-        """Interactive Wayland screen-region capture (`slurp` + `grim`) -> immediate Vision query."""
+        """Interactive Wayland screen-region capture (`slurp` + `grim`) -> attach to composer for user prompt."""
         existing = getattr(self, "_region_capture_worker", None)
         if existing is not None and existing.isRunning():
             return
@@ -7690,9 +7690,8 @@ class CapriCyberdeckWindow(QWidget):
 
         play_ui_sound("ui_click")
         self._show_and_raise()
-        if not self.input_field.toPlainText().strip():
-            self.input_field.setText("Глянь на эту область экрана: что тут происходит и если есть ошибка, подскажи как исправить.")
-        self._send_message()
+        if hasattr(self, "input_field") and self.input_field is not None:
+            self.input_field.setFocus()
 
     def _toggle_voice_input(self):
         if self._is_recording_voice():

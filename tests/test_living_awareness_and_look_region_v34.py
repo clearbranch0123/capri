@@ -239,12 +239,17 @@ def test_popover_look_region_button_and_cyberdeck_ipc(monkeypatch, tmp_path):
     class _FakeInput:
         def __init__(self):
             self.txt = ""
+            self.focused = False
 
         def toPlainText(self):
             return self.txt
 
         def setText(self, t):
             self.txt = t
+
+        def setFocus(self):
+            self.focused = True
+            events.append("focused")
 
     class _MinimalDeck(QWidget):
         def __init__(self):
@@ -293,7 +298,7 @@ def test_popover_look_region_button_and_cyberdeck_ipc(monkeypatch, tmp_path):
         deck._on_region_captured("", "cancelled")
         assert events == []
 
-        # Valid captured PNG attaches cleanly, removes raw tmp file, fills default prompt, and sends
+        # Valid captured PNG attaches cleanly, removes raw tmp file, raises & focuses composer WITHOUT auto-sending
         tmp_png = tmp_path / "captured.png"
         im = QImage(40, 40, QImage.Format.Format_ARGB32)
         im.fill(QColor(78, 216, 232))
@@ -301,8 +306,9 @@ def test_popover_look_region_button_and_cyberdeck_ipc(monkeypatch, tmp_path):
         deck._on_region_captured(str(tmp_png), "ok")
         assert not tmp_png.exists()  # raw temp screenshot cleaned up immediately!
         assert len(deck.attachment_strip.items) == 1
-        assert "raised" in events and "sent" in events
-        assert "область экрана" in deck.input_field.txt.lower()
+        assert "raised" in events and "focused" in events
+        assert "sent" not in events
+        assert deck.input_field.txt == ""
         # Clean up saved attachment temp file created by save_clipboard_image_bytes
         from capri.core.attachments import cleanup_temp_attachment
         for att in deck.attachment_strip.items:
