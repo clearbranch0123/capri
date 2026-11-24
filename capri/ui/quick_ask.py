@@ -810,6 +810,25 @@ class CapriQuickAskBar(QWidget):
         self.response_panel.show()
         self._sync_compact_size()
 
+    def set_language(self, lang: str) -> None:
+        norm = "en" if str(lang or "").strip().lower().startswith("en") else "ru"
+        self._lang = norm
+        self.input_edit.setPlaceholderText(
+            tr_ui(
+                "Спросить Капри…  Enter — отправить · Ctrl+V — скрин · Esc — скрыть",
+                "Ask Capri…  Enter — send · Ctrl+V — screenshot · Esc — hide",
+                lang=norm,
+            )
+        )
+        if not self._copy_reset_timer.isActive():
+            self.btn_copy.setText(tr_ui("Копировать", "Copy", lang=norm))
+        self.btn_collapse.setText(tr_ui("Свернуть", "Collapse", lang=norm))
+        self.btn_open_deck.setText(tr_ui("↗ В Cyberdeck", "↗ Cyberdeck", lang=norm))
+        if not self._generating and not self._voice_recording:
+            self.lbl_status.setText(tr_ui("ГОТОВО", "READY", lang=norm))
+        self._apply_pin_button_style()
+        self._apply_send_button_style(generating=self._generating)
+
     def collapse_response(self) -> None:
         self._raw_response_text = ""
         self._tools_seen.clear()

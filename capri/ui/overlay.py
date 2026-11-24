@@ -969,6 +969,11 @@ class CapriAvatarWidget(QWidget):
                         self.companion_mode = str(data.get("companion_mode") or "normal").strip().lower()
                     if "user_name" in data and str(data.get("user_name") or "").strip():
                         self.awareness.user_name = str(data["user_name"]).strip()
+                    if "ui_language" in data:
+                        ui_lang = "en" if str(data.get("ui_language") or "").strip().lower().startswith("en") else "ru"
+                        os.environ["CAPRI_UI_LANG"] = ui_lang
+                        if getattr(self, "_popover", None) is not None:
+                            self._popover.set_language(ui_lang)
                     self._sync_auto_pose()
                     continue
                 new_state = data.get("state", self.state)

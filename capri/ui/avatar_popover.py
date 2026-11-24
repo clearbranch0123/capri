@@ -341,6 +341,7 @@ class CapriAvatarQuickPopover(QWidget):
 
         # ── 2. 1-Click Pose Chips (only real available animations; 'Лежать' auto-shows if lounge.png exists)
         lbl_poses = QLabel(tr_ui("ПОЗЫ", "POSES", lang=lang), self.card)
+        self.lbl_poses = lbl_poses
         lbl_poses.setObjectName("popoverSection")
         lay.addWidget(lbl_poses)
 
@@ -370,6 +371,7 @@ class CapriAvatarQuickPopover(QWidget):
 
         # ── 3. Clean Behavior Switch Rows ───────────────────────────────────
         lbl_beh = QLabel(tr_ui("ПОВЕДЕНИЕ", "BEHAVIOR", lang=lang), self.card)
+        self.lbl_beh = lbl_beh
         lbl_beh.setObjectName("popoverSection")
         lay.addWidget(lbl_beh)
 
@@ -456,6 +458,34 @@ class CapriAvatarQuickPopover(QWidget):
 
     def _emit_and_refresh(self, fn) -> None:
         fn()
+
+    def set_language(self, lang: str) -> None:
+        norm = "en" if str(lang or "").strip().lower().startswith("en") else "ru"
+        self._lang = norm
+        self.btn_hud.setText(tr_ui("◈ Релик", "◈ Relic", lang=norm))
+        self.lbl_poses.setText(tr_ui("ПОЗЫ", "POSES", lang=norm))
+        self.lbl_beh.setText(tr_ui("ПОВЕДЕНИЕ", "BEHAVIOR", lang=norm))
+        for key, ru_lbl, en_lbl in (
+            ("perch", "Сидеть", "Perch"),
+            ("dance", "Танец", "Dance"),
+            ("sleep", "Сон", "Sleep"),
+            ("lounge", "Лежать", "Lounge"),
+        ):
+            if key in self.pose_buttons:
+                self.pose_buttons[key].setText(tr_ui(ru_lbl, en_lbl, lang=norm))
+        self.row_physics.lbl_title.setText(tr_ui("Физика и гравитация", "Physics & gravity", lang=norm))
+        self.row_autonomous.lbl_title.setText(tr_ui("Свободная жизнь", "Autonomous life", lang=norm))
+        self.row_follow.lbl_title.setText(tr_ui("Следовать за окном", "Follow active window", lang=norm))
+        self.row_auto_poses.lbl_title.setText(tr_ui("Авто-позы (музыка / сон)", "Auto-poses (music / sleep)", lang=norm))
+        self.row_monitor.lbl_title.setText(tr_ui("Монитор", "Monitor", lang=norm))
+        self.btn_quick_ask.setText(tr_ui("⚡ Быстрый вопрос", "⚡ Quick Ask", lang=norm))
+        voice_busy = self.btn_voice.property("active") == "true"
+        self.btn_voice.setText(tr_ui("⏹ Стоп", "⏹ Stop", lang=norm) if voice_busy else tr_ui("🎙 Голос", "🎙 Voice", lang=norm))
+        self.btn_look_region.setText(tr_ui("👁 Область", "👁 Region", lang=norm))
+        self.btn_home.setText(tr_ui("На базу", "Go Home", lang=norm))
+        is_pinned = self.btn_pin.property("pinned") == "true"
+        self.btn_pin.setText(tr_ui("Открепить", "Unpin", lang=norm) if is_pinned else tr_ui("Закрепить тут", "Pin Here", lang=norm))
+        self.btn_quit_avatar.setText(tr_ui("Выключить аватар", "Close Avatar", lang=norm))
 
     def sync_from_state(
         self,

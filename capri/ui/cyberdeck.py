@@ -1499,7 +1499,7 @@ class CapriFirstRunWizard(QDialog):
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("Быстрая настройка — Capri")
-        self.setFixedSize(560, 490)
+        self.setFixedSize(560, 506)
         self.setModal(True)
         self.setStyleSheet(dialog_base_qss())
 
@@ -1515,19 +1515,38 @@ class CapriFirstRunWizard(QDialog):
             )
         )
 
-        lbl_intro = QLabel("Настрой имя, провайдера нейросети и политику безопасности. API-ключ сохраняется только в .env.")
+        lbl_intro = QLabel("Настрой имя, язык интерфейса, провайдера нейросети и политику безопасности. API-ключ сохраняется только в .env.")
         lbl_intro.setWordWrap(True)
         lbl_intro.setStyleSheet(f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 12.5px;")
         layout.addWidget(lbl_intro)
 
-        # User name
+        # User name + UI Language side by side
+        top_grid = QGridLayout()
+        top_grid.setSpacing(10)
         lbl_name = QLabel("Как к тебе обращаться?")
         lbl_name.setStyleSheet(f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 12px; font-weight: 600;")
-        layout.addWidget(lbl_name)
+        lbl_lang = QLabel("Язык / UI Language")
+        lbl_lang.setStyleSheet(f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 12px; font-weight: 600;")
+        top_grid.addWidget(lbl_name, 0, 0)
+        top_grid.addWidget(lbl_lang, 0, 1)
+
         self.edit_user_name = QLineEdit(getattr(self.config.companion, "user_name", "User") or "User")
         self.edit_user_name.setMinimumHeight(36)
         self.edit_user_name.setPlaceholderText("Например: D, Alex, Kai")
-        layout.addWidget(self.edit_user_name)
+        top_grid.addWidget(self.edit_user_name, 1, 0)
+
+        self.combo_ui_lang = QComboBox()
+        self.combo_ui_lang.setMinimumHeight(36)
+        self.combo_ui_lang.addItem("Русский (RU)", "ru")
+        self.combo_ui_lang.addItem("English (EN)", "en")
+        cur_lang = resolve_ui_lang(self.config)
+        lang_idx = self.combo_ui_lang.findData(cur_lang)
+        if lang_idx >= 0:
+            self.combo_ui_lang.setCurrentIndex(lang_idx)
+        top_grid.addWidget(self.combo_ui_lang, 1, 1)
+        top_grid.setColumnStretch(0, 3)
+        top_grid.setColumnStretch(1, 2)
+        layout.addLayout(top_grid)
 
         # Provider
         lbl_prov = QLabel("Провайдер нейросети")
@@ -1621,6 +1640,7 @@ class CapriFirstRunWizard(QDialog):
                 self.config.llm.api_key = api_key
                 update_env_value(PROVIDER_DEFAULTS[pid]["env_key"], api_key)
         self.config.safety.tool_policy = policy
+        self.config.ui.language = str(self.combo_ui_lang.currentData() or "ru")
         self.config.ui.avatar_enabled = bool(self.chk_avatar.isChecked())
         save_config(self.config)
         self.accept()
@@ -2103,12 +2123,29 @@ class CapriProviderSettingsDialog(QDialog):
         pref_layout.setContentsMargins(16, 14, 16, 14)
         pref_layout.setSpacing(10)
 
-        pref_layout.addWidget(_field_label("Как к тебе обращаться (имя в диалоге и промпте)"))
+        pref_top_grid = QGridLayout()
+        pref_top_grid.setSpacing(10)
+        pref_top_grid.addWidget(_field_label("Как к тебе обращаться (имя в диалоге и промпте)"), 0, 0)
+        pref_top_grid.addWidget(_field_label("Язык интерфейса / UI Language"), 0, 1)
+
         self.edit_user_name = QLineEdit()
         self.edit_user_name.setMinimumHeight(36)
         self.edit_user_name.setPlaceholderText("Например: D, Alex, Kai...")
         self.edit_user_name.setText(getattr(self.config.companion, "user_name", "User") or "User")
-        pref_layout.addWidget(self.edit_user_name)
+        pref_top_grid.addWidget(self.edit_user_name, 1, 0)
+
+        self.combo_ui_lang = QComboBox()
+        self.combo_ui_lang.setMinimumHeight(36)
+        self.combo_ui_lang.addItem("Русский (RU)", "ru")
+        self.combo_ui_lang.addItem("English (EN)", "en")
+        cur_ui_lang = resolve_ui_lang(self.config)
+        ui_lang_idx = self.combo_ui_lang.findData(cur_ui_lang)
+        if ui_lang_idx >= 0:
+            self.combo_ui_lang.setCurrentIndex(ui_lang_idx)
+        pref_top_grid.addWidget(self.combo_ui_lang, 1, 1)
+        pref_top_grid.setColumnStretch(0, 3)
+        pref_top_grid.setColumnStretch(1, 2)
+        pref_layout.addLayout(pref_top_grid)
 
         pref_layout.addWidget(_field_label("Политика безопасности инструментов (ToolPolicyEngine)"))
         self.combo_policy = QComboBox()
@@ -2942,6 +2979,7 @@ class CapriProviderSettingsDialog(QDialog):
             self.config.voice.gemini_api_key = ""
 
         # UI
+        self.config.ui.language = str(self.combo_ui_lang.currentData() or "ru")
         self.config.ui.avatar_enabled = self.chk_avatar_enabled.isChecked()
         self.config.ui.auto_avatar_poses = self.chk_auto_avatar_poses.isChecked()
         self.config.ui.game_mode_enabled = self.chk_game_mode.isChecked()
@@ -4329,10 +4367,43 @@ class CapriCyberdeckWindow(QWidget):
         btn_dock_relic.setIconSize(QSize(15, 15))
         btn_dock_relic.setFixedSize(32, 30)
         btn_dock_relic.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_dock_relic.setToolTip("Открыть панель Relic Construct")
+        btn_dock_relic.setToolTip(tr_ui("Открыть панель Relic Construct", "Open Relic Construct Dashboard", self.config))
         btn_dock_relic.setStyleSheet(dock_icon_qss)
         btn_dock_relic.clicked.connect(self._open_relic_dashboard)
+        self.btn_dock_relic = btn_dock_relic
         icon_dock.addWidget(btn_dock_relic)
+
+        self.btn_lang_toggle = QPushButton(resolve_ui_lang(self.config).upper())
+        self.btn_lang_toggle.setFixedSize(36, 28)
+        self.btn_lang_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_lang_toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_lang_toggle.setToolTip(
+            tr_ui(
+                "Сменить язык интерфейса: Русский ↔ English (/lang)",
+                "Switch UI language: English ↔ Русский (/lang)",
+                self.config,
+            )
+        )
+        self.btn_lang_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS.surface_alt};
+                color: {COLORS.text_secondary};
+                border: 1px solid {COLORS.border_subtle};
+                border-radius: 7px;
+                font-family: {TYPE.mono};
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                padding: 0px;
+            }}
+            QPushButton:hover {{
+                background: {COLORS.signal_cyan_soft};
+                color: {COLORS.signal_cyan};
+                border-color: {COLORS.signal_cyan_border};
+            }}
+        """)
+        self.btn_lang_toggle.clicked.connect(self._toggle_ui_language_clicked)
+        icon_dock.addWidget(self.btn_lang_toggle)
 
         icon_dock.addStretch()
 
@@ -4937,16 +5008,19 @@ class CapriCyberdeckWindow(QWidget):
         menu = QMenu(self)
         menu.setStyleSheet(menu_qss())
         apply_dark_palette(menu)
+        lang = resolve_ui_lang(self.config)
+        next_lang = "en" if lang == "ru" else "ru"
         cmds = [
-            ("/status", "Статус системы (CPU / GPU / RAM)"),
-            ("/ask", "Открыть плавающий Quick Ask Bar"),
-            ("/look", "Посмотреть на экран (Vision AI)"),
-            ("/recall", "Поиск по памяти и прошлым сессиям (/recall <запрос>)"),
-            ("/browser status", "Изолированный браузер Capri"),
-            ("/call status", "Join Voice (PipeWire мост)"),
-            ("/mcp status", "MCP-серверы и инструменты"),
-            ("/doctor", "Самодиагностика (/doctor)"),
-            ("/wm-rules", "Правила Niri / Hyprland"),
+            ("/status", tr_ui("Статус системы (CPU / GPU / RAM)", "System status (CPU / GPU / RAM)", lang=lang)),
+            ("/ask", tr_ui("Открыть плавающий Quick Ask Bar", "Open floating Quick Ask Bar", lang=lang)),
+            ("/look", tr_ui("Посмотреть на экран (Vision AI)", "Inspect screen (Vision AI)", lang=lang)),
+            ("/recall", tr_ui("Поиск по памяти и прошлым сессиям (/recall <запрос>)", "Search memory & past chats (/recall <query>)", lang=lang)),
+            (f"/lang {next_lang}", tr_ui("Переключить язык интерфейса на English", "Switch UI language to Русский", lang=lang)),
+            ("/browser status", tr_ui("Изолированный браузер Capri", "Capri isolated browser", lang=lang)),
+            ("/call status", tr_ui("Join Voice (PipeWire мост)", "Join Voice (PipeWire bridge)", lang=lang)),
+            ("/mcp status", tr_ui("MCP-серверы и инструменты", "MCP servers & tools", lang=lang)),
+            ("/doctor", tr_ui("Самодиагностика (/doctor)", "Self-diagnostics (/doctor)", lang=lang)),
+            ("/wm-rules", tr_ui("Правила Niri / Hyprland", "Niri / Hyprland window rules", lang=lang)),
         ]
         for cmd_str, desc in cmds:
             act = menu.addAction(f"{cmd_str}  —  {desc}")
@@ -4997,49 +5071,81 @@ class CapriCyberdeckWindow(QWidget):
     def _open_overflow_menu(self):
         menu = QMenu(self)
         menu.setStyleSheet(menu_qss())
+        lang = resolve_ui_lang(self.config)
+        next_lang = "en" if lang == "ru" else "ru"
 
         cur_sess = self.agent.session_manager.get_session(self.agent.current_session_id)
-        rounds_text = _format_rounds_ru(cur_sess.turn_count if cur_sess else 0)
+        rounds_text = _format_rounds_ru(cur_sess.turn_count if cur_sess else 0, lang=lang)
         act_status = menu.addAction(f"● Online  ·  {rounds_text}  ·  v{__version__}")
         act_status.setEnabled(False)
 
-        act_model = menu.addAction(f"Модель: {self.config.llm.model}")
+        act_model = menu.addAction(f"{tr_ui('Модель', 'Model', lang=lang)}: {self.config.llm.model}")
         act_model.setEnabled(False)
         menu.addSeparator()
 
-        act_reduced = QAction("Уменьшить анимации (Reduced Motion)", menu)
+        act_lang = menu.addAction(
+            get_icon("code", COLORS.signal_cyan, 14),
+            tr_ui("Язык интерфейса: Русский → English", "UI Language: English → Русский", lang=lang),
+        )
+        act_lang.triggered.connect(lambda: self._set_ui_language(next_lang, persist=True, announce=True))
+
+        act_reduced = QAction(tr_ui("Уменьшить анимации (Reduced Motion)", "Reduced Motion", lang=lang), menu)
         act_reduced.setCheckable(True)
         act_reduced.setChecked(bool(self.motion.reduced_motion))
         act_reduced.toggled.connect(lambda checked: self._set_reduced_motion(checked, persist=True))
         menu.addAction(act_reduced)
 
         menu.addSeparator()
-        act_settings = menu.addAction(get_icon("settings", COLORS.text_secondary, 14), "Настройки нейроядра...")
+        act_settings = menu.addAction(
+            get_icon("settings", COLORS.text_secondary, 14),
+            tr_ui("Настройки нейроядра и языка...", "Core & Interface Settings...", lang=lang),
+        )
         act_settings.triggered.connect(self._show_provider_settings)
 
         act_memory = menu.addAction(get_icon("memory", COLORS.text_secondary, 14), "Memory Workbench")
         act_memory.triggered.connect(self._show_memory_workbench)
 
-        act_sessions = menu.addAction(get_icon("sessions", COLORS.text_secondary, 14), "Архив сессий")
+        act_sessions = menu.addAction(
+            get_icon("sessions", COLORS.text_secondary, 14),
+            tr_ui("Архив сессий", "Sessions Archive", lang=lang),
+        )
         act_sessions.triggered.connect(self._show_sessions_dialog)
 
-        act_changelog = menu.addAction(get_icon("changelog", COLORS.text_secondary, 14), f"Обновления (v{__version__})")
+        act_changelog = menu.addAction(
+            get_icon("changelog", COLORS.text_secondary, 14),
+            tr_ui(f"Обновления (v{__version__})", f"Changelog (v{__version__})", lang=lang),
+        )
         act_changelog.triggered.connect(self._show_changelog)
 
         menu.addSeparator()
-        act_doctor = menu.addAction(get_icon("activity", COLORS.signal_cyan, 14), "Диагностика (/doctor)")
+        act_doctor = menu.addAction(
+            get_icon("activity", COLORS.signal_cyan, 14),
+            tr_ui("Диагностика (/doctor)", "Diagnostics (/doctor)", lang=lang),
+        )
         act_doctor.triggered.connect(lambda: self._handle_command("/doctor"))
 
-        act_bugreport = menu.addAction(get_icon("file", COLORS.text_secondary, 14), "Собрать баг-репорт (/bugreport)")
+        act_bugreport = menu.addAction(
+            get_icon("file", COLORS.text_secondary, 14),
+            tr_ui("Собрать баг-репорт (/bugreport)", "Generate Bug Report (/bugreport)", lang=lang),
+        )
         act_bugreport.triggered.connect(lambda: self._handle_command("/bugreport"))
 
-        act_setup = menu.addAction(get_icon("settings", COLORS.text_secondary, 14), "Мастер настройки (/setup)")
+        act_setup = menu.addAction(
+            get_icon("settings", COLORS.text_secondary, 14),
+            tr_ui("Мастер настройки (/setup)", "First-Run Wizard (/setup)", lang=lang),
+        )
         act_setup.triggered.connect(self._show_first_run_wizard)
 
-        act_prof_exp = menu.addAction(get_icon("download", COLORS.text_secondary, 14), "Экспорт профиля (.zip)...")
+        act_prof_exp = menu.addAction(
+            get_icon("download", COLORS.text_secondary, 14),
+            tr_ui("Экспорт профиля (.zip)...", "Export Profile (.zip)...", lang=lang),
+        )
         act_prof_exp.triggered.connect(self._export_profile_dialog)
 
-        act_prof_imp = menu.addAction(get_icon("upload", COLORS.text_secondary, 14), "Восстановить профиль (.zip)...")
+        act_prof_imp = menu.addAction(
+            get_icon("upload", COLORS.text_secondary, 14),
+            tr_ui("Восстановить профиль (.zip)...", "Restore Profile (.zip)...", lang=lang),
+        )
         act_prof_imp.triggered.connect(self._restore_profile_dialog)
 
         pos = self.btn_more.mapToGlobal(QPoint(0, self.btn_more.height() + 4))
@@ -5060,15 +5166,21 @@ class CapriCyberdeckWindow(QWidget):
     def _show_first_run_wizard(self):
         dlg = CapriFirstRunWizard(self.config, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._set_ui_language(self.config.ui.language, persist=False, announce=False)
             self.agent.reload_config(self.config)
             self._barge_in_stt = None
             self._update_sys_info()
             self.btn_provider.setText((self.config.llm.provider or "GROQ").upper())
             self._refresh_welcome_canvas(context="startup")
             self._append_message(
-                "Система",
-                f"Настройка сохранена: пользователь **{self.config.companion.user_name}**, "
-                f"провайдер **{(self.config.llm.provider or '').upper()}**, политика **{self.config.safety.tool_policy.upper()}**.",
+                tr_ui("Система", "System", self.config),
+                tr_ui(
+                    f"Настройка сохранена: пользователь **{self.config.companion.user_name}**, "
+                    f"провайдер **{(self.config.llm.provider or '').upper()}**, политика **{self.config.safety.tool_policy.upper()}**.",
+                    f"Setup saved: user **{self.config.companion.user_name}**, "
+                    f"provider **{(self.config.llm.provider or '').upper()}**, policy **{self.config.safety.tool_policy.upper()}**.",
+                    self.config,
+                ),
             )
 
     def _export_profile_dialog(self):
@@ -5694,6 +5806,7 @@ class CapriCyberdeckWindow(QWidget):
         dlg = CapriProviderSettingsDialog(self.config, self)
         if dlg.exec():
             self._stop_generation()
+            self._set_ui_language(self.config.ui.language, persist=False, announce=False)
             self._set_reduced_motion(bool(self.config.ui.reduced_motion), persist=False)
             avatar_on = bool(getattr(self.config.ui, "avatar_enabled", True))
             if hasattr(self, "brand_mark") and self.brand_mark:
@@ -5707,6 +5820,7 @@ class CapriCyberdeckWindow(QWidget):
                     "avatar_reactions_enabled": bool(getattr(self.config.ui, "avatar_reactions_enabled", True)),
                     "companion_mode": str(getattr(self.config.companion, "mode", "normal") or "normal"),
                     "user_name": str(getattr(self.config.companion, "user_name", "User") or "User"),
+                    "ui_language": resolve_ui_lang(self.config),
                 })
             elif self.avatar_proc and self.avatar_proc.poll() is None:
                 try:
@@ -5846,9 +5960,31 @@ class CapriCyberdeckWindow(QWidget):
 
             threading.Thread(target=_speak_async, args=(rec.content,), daemon=True).start()
 
+    def _toggle_ui_language_clicked(self) -> None:
+        play_ui_sound("ui_click")
+        cur = resolve_ui_lang(self.config)
+        self._set_ui_language("en" if cur == "ru" else "ru", persist=True, announce=False)
+
+    def _set_ui_language(self, lang: str, *, persist: bool = True, announce: bool = False) -> None:
+        norm = "en" if str(lang or "").strip().lower().startswith("en") else "ru"
+        self.config.ui.language = norm
+        os.environ["CAPRI_UI_LANG"] = norm
+        if persist:
+            try:
+                if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                    save_config(self.config)
+            except Exception:
+                pass
+        self._apply_ui_language()
+        send_avatar_control({"type": "config_sync", "ui_language": norm})
+        if announce:
+            msg = "UI language switched to English (`en`)." if norm == "en" else "Язык интерфейса переключён на русский (`ru`)."
+            self._append_message("System" if norm == "en" else "Система", msg)
+
     def _apply_ui_language(self) -> None:
         """Live-update visible Cyberdeck chrome when switching `/lang ru|en`."""
         cfg = self.config
+        lang = resolve_ui_lang(cfg)
         self.btn_new_session.setText(tr_ui("Новый чат", "New Chat", cfg))
         self.search_session_input.setPlaceholderText(tr_ui("Поиск диалогов...", "Search chats...", cfg))
         if hasattr(self, "lbl_syn_header"):
@@ -5864,12 +6000,40 @@ class CapriCyberdeckWindow(QWidget):
         self.btn_mem_approve.setText(tr_ui("Запомнить", "Save", cfg))
         self.btn_mem_edit.setText(tr_ui("Править", "Edit", cfg))
         self.btn_mem_reject.setText(tr_ui("Отклонить", "Dismiss", cfg))
+        if hasattr(self, "btn_lang_toggle") and self.btn_lang_toggle:
+            self.btn_lang_toggle.setText(lang.upper())
+            self.btn_lang_toggle.setToolTip(
+                tr_ui(
+                    "Сменить язык интерфейса: Русский ↔ English (/lang)",
+                    "Switch UI language: English ↔ Русский (/lang)",
+                    cfg,
+                )
+            )
+        if hasattr(self, "btn_dock_relic") and self.btn_dock_relic:
+            self.btn_dock_relic.setToolTip(
+                tr_ui("Открыть панель Relic Construct", "Open Relic Construct Dashboard", cfg)
+            )
         is_narrow = self.width() < 660
         self.input_field.setPlaceholderText(
             tr_ui("Написать Капри...", "Message Capri...", cfg)
             if is_narrow
             else tr_ui("Написать Капри...   / для команд", "Message Capri...   / for commands", cfg)
         )
+        qa = getattr(self, "_quick_ask", None)
+        if qa is not None and hasattr(qa, "set_language"):
+            qa.set_language(lang)
+        relic = getattr(self, "_relic_dashboard", None)
+        if relic is not None:
+            was_vis = relic.isVisible()
+            pos = relic.pos()
+            relic.close()
+            self._relic_dashboard = None
+            if was_vis:
+                from .dashboard import CapriRelicDashboard
+                self._relic_dashboard = CapriRelicDashboard()
+                self._relic_dashboard.move(pos)
+                self._relic_dashboard.refresh_stats()
+                self._relic_dashboard.show()
         self._apply_composer_state()
         self._refresh_memory_candidate_bar()
         self._refresh_sidebar_sessions()
@@ -6532,60 +6696,73 @@ class CapriCyberdeckWindow(QWidget):
             return
 
         if cmd == "/help":
-            help_text = (
-                "ДОСТУПНЫЕ КОМАНДЫ КИБЕРДЕКА:\n\n"
-                "• /doctor — самодиагностика системы, конфига, SQLite и аудио\n"
-                "• /bugreport [путь.md] — безопасный баг-репорт (без ключей и переписки)\n"
-                "• /setup — мастер быстрой настройки (имя, провайдер, ключ, политика)\n"
-                "• /policy [safe|ask|trusted] — политика безопасности инструментов\n"
-                "• /profile [export|restore] — версионированный бэкап и восстановление профиля (.zip)\n"
-                "• /new [название] — начать новую сессию диалога\n"
-                "• /resume [id|last] — возобновить сохранённую сессию\n"
-                "• /sessions — открыть архив сессий\n"
-                "• /backup — создать резервную копию базы сессий\n"
-                "• /mode [focus|normal|quiet|playful] — сменить режим поведения Капри\n"
-                "• /model [120b|qwen|20b|deepseek] — переключить модель или показать список\n"
-                "• /key [api_key] — показать или обновить API-ключ (.env)\n"
-                "• /look [вопрос] — посмотреть на экран через Vision AI (или Ctrl+V скрин / Drag & Drop)\n"
-                "• /reset [capri] — перезагрузка биочипа и сброс отношений\n"
-                "• /np [next|prev|pause|play] — управление медиаплеером\n"
-                "• /vol [громкость|mute] — громкость системы\n"
-                "• /timer [5m|30s] [название] — быстрый таймер (/timers — список)\n"
-                "• /top [cpu|mem] — топ ресурсоёмких процессов\n"
-                "• /mood (/rel) — настроение, стадия связи и доверие\n"
-                "• /context (/work) — рабочий контекст, задачи и решения\n"
-                "• /initiative (/proactive) — настройки самостоятельной инициативы\n"
-                "• /memory (/workbench) — Memory Workbench: память, /memory pending | approve <id> | reject <id>\n"
-                "• /recall <запрос> — единый поиск по фактам памяти и всем прошлым сессиям\n"
-                "• /ask — открыть плавающую мини-строку Quick Ask Bar (capri-deck --ask)\n"
-                "• /forget <ключ> — удалить факт из памяти\n"
-                "• /mcp [status|connect|disconnect|tools] — внешние MCP-серверы\n"
-                "• /browser [url|search|link|status|clear] — изолированный браузер\n"
-                "• /call [join|leave|status] — виртуальный микрофон PipeWire (Join Voice)\n"
-                "• /wm-rules [niri|hyprland] [apply] [--no-hotkey] — правила окон и хоткеи\n"
-                "• /gamemode [auto|on|off] — тихий режим во время полноэкранных игр\n"
-                "• /focus [окно] / /windows — управление окнами Niri\n"
-                "• /avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle] — управление аватаром\n"
-                "• /come, /stay, /follow [on|off], /home — Spatial Presence аватара\n"
-                "• /status — телеметрия железа\n"
-                "• /stop (Esc) — остановить генерацию и речь\n"
-                "• /wake [on|off] — Wake-Word («Капри»)\n"
-                "• /bargein [on|off] — Hands-Free перебивание речи Капри голосом\n"
-                "• Горячие клавиши: Enter (отправить), Shift+Enter (перенос), Ctrl+V (скриншот), Ctrl+M (голос), Esc (стоп)\n"
-                "• /tools, /lang [ru|en], /clear, /privacy, /changelog, /exit"
-            )
-            self._append_message("Система", help_text)
+            lang = resolve_ui_lang(self.config)
+            if lang == "en":
+                help_text = (
+                    "**CAPRI CYBERDECK COMMANDS:**\n\n"
+                    "- `/ask` — open floating Quick Ask Bar (`capri-deck --ask`)\n"
+                    "- `/lang [ru|en]` — switch UI language (`RU` pill in sidebar or Settings)\n"
+                    "- `/doctor` — environment, config, SQLite, and PipeWire self-diagnostics\n"
+                    "- `/bugreport [path.md]` — safe redacted bug report (no keys or chats)\n"
+                    "- `/setup` — first-run wizard (name, language, provider, key, policy)\n"
+                    "- `/policy [safe|ask|trusted]` — `ToolPolicyEngine` safety level\n"
+                    "- `/profile [export|restore]` — versioned `.zip` profile backup & restore\n"
+                    "- `/new [title]` / `/resume [id|last]` / `/sessions` / `/backup` — session management\n"
+                    "- `/mode [focus|normal|quiet|playful]` — companion behavior mode\n"
+                    "- `/model [...]` / `/key [api_key]` — switch LLM model or update `.env` key\n"
+                    "- `/look [prompt]` — inspect desktop via Vision AI (or `Ctrl+V` / Drag & Drop)\n"
+                    "- `/memory` (`/workbench`) / `/forget <key>` — candidate-gated long-term memory\n"
+                    "- `/recall <query>` — unified BM25 + FTS5 search across memory & past chats\n"
+                    "- `/mcp [status|connect|disconnect|tools]` — external MCP servers\n"
+                    "- `/browser [url|search|link|status|clear]` — isolated browser\n"
+                    "- `/call [join|leave|status]` — PipeWire virtual microphone (Join Voice)\n"
+                    "- `/wm-rules [niri|hyprland] [apply] [--no-hotkey]` — compositor rules & hotkeys\n"
+                    "- `/gamemode [auto|on|off]` — quiet power-saver mode during fullscreen games\n"
+                    "- `/avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle]` — desktop avatar\n"
+                    "- `/come`, `/stay`, `/follow [on|off]`, `/home` — avatar Spatial Presence\n"
+                    "- `/mood` (`/rel`), `/context` (`/work`), `/initiative` (`/proactive`)\n"
+                    "- `/np [next|prev|pause|play]`, `/vol [level|mute]`, `/timer [5m|30s]`, `/top [cpu|mem]`, `/status`\n"
+                    "- `/stop` (`Esc`), `/wake [on|off]`, `/bargein [on|off]`\n"
+                    "- `/tools`, `/reset`, `/clear`, `/privacy`, `/changelog`, `/exit`"
+                )
+            else:
+                help_text = (
+                    "**ДОСТУПНЫЕ КОМАНДЫ КИБЕРДЕКА:**\n\n"
+                    "- `/ask` — открыть плавающую мини-строку Quick Ask Bar (`capri-deck --ask`)\n"
+                    "- `/lang [ru|en]` — сменить язык интерфейса (или кнопка `RU/EN` внизу панели и в Настройках)\n"
+                    "- `/doctor` — самодиагностика системы, конфига, SQLite и аудио\n"
+                    "- `/bugreport [путь.md]` — безопасный баг-репорт (без ключей и переписки)\n"
+                    "- `/setup` — мастер быстрой настройки (имя, язык, провайдер, ключ, политика)\n"
+                    "- `/policy [safe|ask|trusted]` — политика безопасности инструментов\n"
+                    "- `/profile [export|restore]` — версионированный бэкап и восстановление профиля (`.zip`)\n"
+                    "- `/new [название]` / `/resume [id|last]` / `/sessions` / `/backup` — управление сессиями\n"
+                    "- `/mode [focus|normal|quiet|playful]` — сменить режим поведения Капри\n"
+                    "- `/model [120b|qwen|20b|deepseek]` / `/key [api_key]` — модель и API-ключ (`.env`)\n"
+                    "- `/look [вопрос]` — посмотреть на экран через Vision AI (или `Ctrl+V` скрин / Drag & Drop)\n"
+                    "- `/memory` (`/workbench`) / `/forget <ключ>` — Memory Workbench и кандидаты памяти\n"
+                    "- `/recall <запрос>` — единый поиск по фактам памяти и всем прошлым сессиям\n"
+                    "- `/mcp [status|connect|disconnect|tools]` — внешние MCP-серверы\n"
+                    "- `/browser [url|search|link|status|clear]` — изолированный браузер\n"
+                    "- `/call [join|leave|status]` — виртуальный микрофон PipeWire (Join Voice)\n"
+                    "- `/wm-rules [niri|hyprland] [apply] [--no-hotkey]` — правила окон и хоткеи\n"
+                    "- `/gamemode [auto|on|off]` — тихий режим во время полноэкранных игр\n"
+                    "- `/focus [окно]` / `/windows` — управление окнами Niri\n"
+                    "- `/avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle]` — управление аватаром\n"
+                    "- `/come`, `/stay`, `/follow [on|off]`, `/home` — Spatial Presence аватара\n"
+                    "- `/mood` (`/rel`), `/context` (`/work`), `/initiative` (`/proactive`)\n"
+                    "- `/np [next|prev|pause|play]`, `/vol [громкость|mute]`, `/timer [5m|30s]`, `/top [cpu|mem]`, `/status`\n"
+                    "- `/stop` (`Esc`), `/wake [on|off]`, `/bargein [on|off]`\n"
+                    "- `/tools`, `/reset`, `/clear`, `/privacy`, `/changelog`, `/exit`"
+                )
+            self._append_message(tr_ui("Система", "System", self.config), help_text)
             return
 
         if cmd in ("/lang", "/language"):
             sub = parts[1].strip().lower() if len(parts) > 1 else ""
             if sub in ("en", "ru"):
-                self.config.ui.language = sub
-                os.environ["CAPRI_UI_LANG"] = sub
-                save_config(self.config)
-                self._apply_ui_language()
-                msg = "UI language switched to English (`en`)." if sub == "en" else "Язык интерфейса переключён на русский (`ru`)."
-                self._append_message("System" if sub == "en" else "Система", msg)
+                self._set_ui_language(sub, persist=True, announce=True)
+                if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+                    save_config(self.config)
             else:
                 cur = resolve_ui_lang(self.config)
                 self._append_message(

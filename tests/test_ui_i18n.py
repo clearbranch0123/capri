@@ -62,3 +62,57 @@ def test_widgets_render_english_when_ui_lang_en(tmp_path):
         assert relic.lbl_stage_line.text() == "Trusted Partner ⚡"
         assert "Online," in relic.lbl_quote.text()
         relic.close()
+
+
+def test_cyberdeck_lang_button_and_settings_dialogs(tmp_path):
+    _ensure_app()
+    from capri.core.memory import MemoryStore
+    from capri.core.sessions import SessionManager
+    from capri.ui.cyberdeck import CapriCyberdeckWindow, CapriFirstRunWizard, CapriProviderSettingsDialog
+
+    cfg = AppConfig()
+    cfg.ui.language = "ru"
+    cfg.voice.wake_word_enabled = False
+    cfg.ui.avatar_enabled = False
+
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("capri.ui.cyberdeck.notify_avatar", return_value=True),
+        patch("capri.ui.cyberdeck.send_avatar_control", return_value=True),
+    ):
+        os.environ.pop("CAPRI_UI_LANG", None)
+        deck = CapriCyberdeckWindow(config=cfg)
+        deck.agent.session_manager = SessionManager(db_path=tmp_path / "s.db")
+        deck.agent.memory_store = MemoryStore(file_path=tmp_path / "m.json")
+        assert deck.btn_lang_toggle.text() == "RU"
+        assert deck.btn_new_session.text() == "Новый чат"
+
+        # 1-click sidebar dock toggle switches RU -> EN live
+        deck.btn_lang_toggle.click()
+        assert deck.config.ui.language == "en"
+        assert deck.btn_lang_toggle.text() == "EN"
+        assert deck.btn_new_session.text() == "New Chat"
+
+        # 1-click back EN -> RU
+        deck.btn_lang_toggle.click()
+        assert deck.config.ui.language == "ru"
+        assert deck.btn_lang_toggle.text() == "RU"
+        assert deck.btn_new_session.text() == "Новый чат"
+
+        # Provider Settings dialog & First-Run Wizard expose combo_ui_lang
+        dlg_settings = CapriProviderSettingsDialog(cfg, deck)
+        assert dlg_settings.combo_ui_lang.findData("en") >= 0
+        dlg_settings.close()
+
+        dlg_wizard = CapriFirstRunWizard(cfg, deck)
+        assert dlg_wizard.combo_ui_lang.findData("en") >= 0
+        dlg_wizard.close()
+        deck.close()
+
+        pop = CapriAvatarQuickPopover(None)
+        pop.set_language("en")
+        assert pop.btn_quick_ask.text() == "⚡ Quick Ask"
+        pop.set_language("ru")
+        assert pop.btn_quick_ask.text() == "⚡ Быстрый вопрос"
+        pop.close()
+
