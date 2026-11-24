@@ -235,6 +235,7 @@ def test_open_beta_governance_and_github_files_present():
     required_files = (
         ROOT_DIR / "LICENSE",
         ROOT_DIR / "ASSETS_NOTICE.md",
+        ROOT_DIR / "capri" / "ASSETS_NOTICE.md",
         ROOT_DIR / "SECURITY.md",
         ROOT_DIR / "README.md",
         ROOT_DIR / "README.ru.md",
@@ -249,7 +250,17 @@ def test_open_beta_governance_and_github_files_present():
         assert f.exists(), f"Missing required Open Beta file: {f}"
 
     assert "MIT License" in (ROOT_DIR / "LICENSE").read_text(encoding="utf-8")
-    assert "PolyForm Noncommercial" in (ROOT_DIR / "ASSETS_NOTICE.md").read_text(encoding="utf-8")
+    assets_notice = (ROOT_DIR / "ASSETS_NOTICE.md").read_text(encoding="utf-8")
+    pkg_assets_notice = (ROOT_DIR / "capri" / "ASSETS_NOTICE.md").read_text(encoding="utf-8")
+    assert assets_notice == pkg_assets_notice
+    assert "PolyForm Noncommercial License 1.0.0" in assets_notice
+    assert "https://polyformproject.org/licenses/noncommercial/1.0.0" in assets_notice
+    assert "Required Notice: Copyright 2026 Lachy (https://github.com/lachydotmcg)" in assets_notice
+    assert (
+        "Required Notice: Anyone who uses Capri's code, art, animations or any of its other assets must credit "
+        "the Capri project (https://github.com/lachydotmcg/capri-desktop). Capri's art and animations are by her "
+        "artist, who prefers to stay private. Parts made by others keep their own licences, listed in its README."
+    ) in assets_notice
     assert "Security Advisories" in (ROOT_DIR / "SECURITY.md").read_text(encoding="utf-8")
     readme_en = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
     assert "README.ru.md" in readme_en

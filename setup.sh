@@ -105,7 +105,7 @@ if [ "$MODE" = "upgrade" ] && [ -d "$CONFIG_DIR" ]; then
     SNAP_TS="$(date +%Y%m%d_%H%M%S)"
     BACKUP_SNAP="$CONFIG_DIR/backups/pre_upgrade_${SNAP_TS}"
     mkdir -p "$BACKUP_SNAP"
-    for fname in config.yaml sessions.db memory.json emotion.json context.json initiative.json; do
+    for fname in config.yaml sessions.db memory.json pending_memory.json emotion.json context.json initiative.json; do
         if [ -f "$CONFIG_DIR/$fname" ]; then
             cp -p "$CONFIG_DIR/$fname" "$BACKUP_SNAP/$fname"
         fi

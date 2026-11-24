@@ -15,7 +15,7 @@ body:
     attributes:
       label: Capri Version
       description: Output of `capri --version`
-      placeholder: "3.1.0"
+      placeholder: "3.5.0"
     validations:
       required: true
 
@@ -38,6 +38,7 @@ body:
       options:
         - Niri (Wayland)
         - Hyprland (Wayland)
+        - Sway / Other wlroots (Wayland)
         - Other Wayland
         - X11 / Headless
     validations:

@@ -4895,7 +4895,9 @@ class CapriCyberdeckWindow(QWidget):
         apply_dark_palette(menu)
         cmds = [
             ("/status", "Статус системы (CPU / GPU / RAM)"),
+            ("/ask", "Открыть плавающий Quick Ask Bar"),
             ("/look", "Посмотреть на экран (Vision AI)"),
+            ("/recall", "Поиск по памяти и прошлым сессиям (/recall <запрос>)"),
             ("/browser status", "Изолированный браузер Capri"),
             ("/call status", "Join Voice (PipeWire мост)"),
             ("/mcp status", "MCP-серверы и инструменты"),
@@ -6363,6 +6365,10 @@ class CapriCyberdeckWindow(QWidget):
             self._quit_application()
             return
 
+        if cmd == "/ask":
+            self._toggle_quick_ask()
+            return
+
         if cmd == "/recall":
             query = text[len(parts[0]):].strip()
             if not query:
@@ -6474,7 +6480,14 @@ class CapriCyberdeckWindow(QWidget):
                 "• /context (/work) — рабочий контекст, задачи и решения\n"
                 "• /initiative (/proactive) — настройки самостоятельной инициативы\n"
                 "• /memory (/workbench) — Memory Workbench: память, /memory pending | approve <id> | reject <id>\n"
+                "• /recall <запрос> — единый поиск по фактам памяти и всем прошлым сессиям\n"
+                "• /ask — открыть плавающую мини-строку Quick Ask Bar (capri-deck --ask)\n"
                 "• /forget <ключ> — удалить факт из памяти\n"
+                "• /mcp [status|connect|disconnect|tools] — внешние MCP-серверы\n"
+                "• /browser [url|search|link|status|clear] — изолированный браузер\n"
+                "• /call [join|leave|status] — виртуальный микрофон PipeWire (Join Voice)\n"
+                "• /wm-rules [niri|hyprland] [apply] [--no-hotkey] — правила окон и хоткеи\n"
+                "• /gamemode [auto|on|off] — тихий режим во время полноэкранных игр\n"
                 "• /focus [окно] / /windows — управление окнами Niri\n"
                 "• /avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle] — управление аватаром\n"
                 "• /come, /stay, /follow [on|off], /home — Spatial Presence аватара\n"

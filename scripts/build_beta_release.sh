@@ -148,7 +148,7 @@ with tarfile.open(tar_path, "r:gz") as tf:
                 if secret_re.search(data):
                     raise AssertionError(f"Potential API key pattern found in tarball file: {m.name}")
 
-required_tar_docs = {"LICENSE", "ASSETS_NOTICE.md", "SECURITY.md", "README.md", "setup.sh"}
+required_tar_docs = {"LICENSE", "ASSETS_NOTICE.md", "SECURITY.md", "README.md", "README.ru.md", "setup.sh"}
 missing_docs = sorted(required_tar_docs - tar_files)
 assert not missing_docs, f"Tarball is missing required Open Beta files: {missing_docs}"
 
@@ -164,6 +164,8 @@ with zipfile.ZipFile(whl_path, "r") as zf:
                 raise AssertionError(f"Potential API key pattern found in wheel file: {name}")
 
     required_wheel_assets = {
+        "capri/ASSETS_NOTICE.md",
+        "capri/CHANGELOG.md",
         "capri/assets/ui_click.wav",
         "capri/assets/ui_glitch.wav",
         "capri/assets/wake_chirp.wav",
@@ -174,6 +176,13 @@ with zipfile.ZipFile(whl_path, "r") as zf:
     }
     missing_assets = sorted(required_wheel_assets - names)
     assert not missing_assets, f"Wheel is missing packaged runtime assets: {missing_assets}"
+    notice_txt = zf.read("capri/ASSETS_NOTICE.md").decode("utf-8")
+    assert "Required Notice: Copyright 2026 Lachy (https://github.com/lachydotmcg)" in notice_txt, (
+        "Wheel ASSETS_NOTICE.md is missing upstream Required Notice line 1"
+    )
+    assert "Required Notice: Anyone who uses Capri's code, art, animations or any of its other assets must credit the Capri project (https://github.com/lachydotmcg/capri-desktop)." in notice_txt, (
+        "Wheel ASSETS_NOTICE.md is missing upstream Required Notice line 2"
+    )
 
 print("[3/3] Hygiene, licensing & asset packaging audit PASSED: zero .git/.env/keys, LICENSE/ASSETS_NOTICE/SECURITY bundled.")
 PY
