@@ -16,11 +16,11 @@ The **Capri Linux** source code (Python modules under `capri/`, shell scripts, t
 | `capri/assets/capri_voice_clean.wav`, `capri_voice_reference.wav` | Optional local voice reference samples for voice synthesis / cloning experiments | Noncommercial / personal reference clips only; **not** covered by the MIT license. Third-party dubbing clips are intentionally excluded from public distribution. Do not redistribute commercially or misrepresent voice identity. |
 | `capri/assets/ui_click.wav`, `ui_glitch.wav`, `wake_chirp.wav` | Short synthesized UI audio cues | Generated for Capri Linux UI feedback; bundled for noncommercial/personal use with the app. |
 | `capri/assets/capri-cyberdeck.desktop` | FreeDesktop `.desktop` launcher template | Authored for Capri Linux (MIT). |
-| `docs/screenshots/*.png` | Application UI screenshots rendered from Capri Cyberdeck and Relic Dashboard | Project documentation screenshots; may display noncommercial artwork above. |
+| `docs/screenshots/*.png`, `docs/screenshots/capri-demo.webp` | Application UI screenshots and animated demo rendered from Capri Cyberdeck, Relic Dashboard, and Desktop Avatar | Project documentation media; may display noncommercial artwork above. |
 
 ## Third-Party Trademarks & Attribution
 
-- *Cyberpunk: Edgerunners* and related names/concepts belong to their respective rights holders (CD PROJEKT RED / Studio TRIGGER). Capri Linux is an independent, unofficial, noncommercial fan companion project and is not affiliated with or endorsed by CD PROJEKT RED or Studio TRIGGER.
+- *Cyberpunk: Edgerunners* and related names/concepts belong to their respective rights holders (CD PROJEKT RED / Studio TRIGGER / Netflix). Capri Linux is an independent, unofficial, noncommercial fan companion project and is not affiliated with, endorsed by, or associated with CD PROJEKT RED, Studio TRIGGER, or Netflix.
 - Inspiration and desktop companion concept credit: [`lachydotmcg/capri-desktop`](https://github.com/lachydotmcg/capri-desktop) (PolyForm Noncommercial License 1.0.0).
 
 ## Downstream Forks & Packaging

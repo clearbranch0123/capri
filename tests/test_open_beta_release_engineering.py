@@ -237,6 +237,7 @@ def test_open_beta_governance_and_github_files_present():
         ROOT_DIR / "ASSETS_NOTICE.md",
         ROOT_DIR / "SECURITY.md",
         ROOT_DIR / "README.md",
+        ROOT_DIR / "README.ru.md",
         ROOT_DIR / "docs" / "screenshots" / "capri-demo.webp",
         ROOT_DIR / "docs" / "screenshots" / "cyberdeck.png",
         ROOT_DIR / "docs" / "screenshots" / "relic.png",
@@ -250,3 +251,7 @@ def test_open_beta_governance_and_github_files_present():
     assert "MIT License" in (ROOT_DIR / "LICENSE").read_text(encoding="utf-8")
     assert "PolyForm Noncommercial" in (ROOT_DIR / "ASSETS_NOTICE.md").read_text(encoding="utf-8")
     assert "Security Advisories" in (ROOT_DIR / "SECURITY.md").read_text(encoding="utf-8")
+    readme_en = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
+    assert "README.ru.md" in readme_en
+    assert "not affiliated with" in readme_en.lower()
+    assert "CD PROJEKT RED" in readme_en
