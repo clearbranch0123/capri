@@ -128,8 +128,15 @@ class EmotionEngine:
         else:
             return "bonded_relic"
 
-    @property
-    def relationship_stage_label(self) -> str:
+    def get_relationship_stage_label(self, lang: str = "ru") -> str:
+        if str(lang or "ru").strip().lower().startswith("en"):
+            en_labels = {
+                "estranged": "Estranged / Distant ❄️",
+                "cautious_ally": "Cautious Ally ⚙️",
+                "trusted_partner": "Trusted Partner ⚡",
+                "bonded_relic": "Bonded Engram 🤍",
+            }
+            return en_labels.get(self.relationship_stage, "Partner")
         labels = {
             "estranged": "Отчуждение / Дистанция ❄️",
             "cautious_ally": "Осторожный союзник ⚙️",
@@ -137,6 +144,10 @@ class EmotionEngine:
             "bonded_relic": "Синхронизированная энграмма 🤍",
         }
         return labels.get(self.relationship_stage, "Напарник")
+
+    @property
+    def relationship_stage_label(self) -> str:
+        return self.get_relationship_stage_label("ru")
 
     def load(self):
         target = self._storage_path()

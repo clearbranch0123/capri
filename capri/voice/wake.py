@@ -122,22 +122,26 @@ def ensure_pipewire_audio_route():
 
 def play_wake_sound():
     """Воспроизведение короткого футуристичного сигнала активации."""
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     try:
         sound_path = str(CHIRP_SOUND)
         if CHIRP_SOUND.exists():
+            proc = None
             if shutil.which("paplay"):
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     ["paplay", sound_path],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                return
             elif shutil.which("mpv"):
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     ["mpv", "--no-config", "--no-video", "--really-quiet", sound_path],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+            if proc is not None:
+                threading.Thread(target=proc.wait, daemon=True).start()
                 return
     except Exception:
         pass

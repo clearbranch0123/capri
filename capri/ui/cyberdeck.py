@@ -104,6 +104,16 @@ from ..tools.desktop import capri_self_control, focus_window, get_system_status,
 from ..tools.memory import add_memory, clear_all_memories, delete_memory, load_memories
 from ..tools.registry import registry
 from .client import notify_avatar, notify_avatar_locomotion, send_avatar_control
+from .i18n import (
+    category_label,
+    format_active_tools,
+    format_facts,
+    format_rounds,
+    is_english_ui,
+    mood_label,
+    resolve_ui_lang,
+    tr_ui,
+)
 from .icons import get_icon, render_svg_pixmap
 from .motion import MotionController, MotionTokens
 from .theme import (
@@ -183,19 +193,24 @@ def send_cyberdeck_ipc(cmd: str, socket_path: Optional[str] = None, timeout: flo
 
 
 def play_ui_sound(sound_name: str):
-    """Non-blocking UI sound playback."""
+    """Non-blocking UI sound playback (skipped in headless offscreen test runs)."""
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     try:
         sound_path = ASSETS_DIR / f"{sound_name}.wav"
         if not sound_path.exists():
             return
+        proc = None
         if shutil.which("paplay"):
-            subprocess.Popen(["paplay", str(sound_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(["paplay", str(sound_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif shutil.which("mpv"):
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["mpv", "--no-config", "--no-video", "--really-quiet", str(sound_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+        if proc is not None:
+            threading.Thread(target=proc.wait, daemon=True).start()
     except Exception:
         pass
 
@@ -211,13 +226,8 @@ def fade_in_card(widget: QWidget, duration: int = MotionTokens.MESSAGE_MS, motio
     ctrl.fade_in(widget, duration=duration)
 
 
-def _format_rounds_ru(count: int) -> str:
-    n = abs(int(count))
-    if n % 10 == 1 and n % 100 != 11:
-        return f"{n} раунд"
-    if 2 <= (n % 10) <= 4 and not (12 <= (n % 100) <= 14):
-        return f"{n} раунда"
-    return f"{n} раундов"
+def _format_rounds_ru(count: int, lang: Optional[str] = None) -> str:
+    return format_rounds(count, lang=lang)
 
 
 class ChatMessageCard(QFrame):
@@ -382,7 +392,7 @@ class ChatMessageCard(QFrame):
             self.avatar_mark = CapriSignalMark(size=20, avatar_enabled=True, parent=self._asst_wrap)
             header_layout.addWidget(self.avatar_mark)
 
-            lbl_name = QLabel("Капри")
+            lbl_name = QLabel(tr_ui("Капри", "Capri"))
             lbl_name.setStyleSheet(f"""
                 color: {COLORS.text_primary};
                 font-family: {TYPE.sans};
@@ -396,7 +406,7 @@ class ChatMessageCard(QFrame):
             header_layout.addWidget(lbl_ts)
 
             if self.is_proactive:
-                lbl_pro = QLabel("инициатива")
+                lbl_pro = QLabel(tr_ui("инициатива", "initiative"))
                 lbl_pro.setStyleSheet(f"""
                     color: {COLORS.signal_cyan};
                     background: {COLORS.signal_cyan_soft};
@@ -458,7 +468,7 @@ class ChatMessageCard(QFrame):
             dot.setStyleSheet(f"background: {COLORS.crimson}; border-radius: 3px; border: none;")
             header_layout.addWidget(dot)
 
-            lbl_name = QLabel("Система")
+            lbl_name = QLabel(tr_ui("Система", "System"))
             lbl_name.setStyleSheet(f"""
                 color: {COLORS.text_muted};
                 font-family: {TYPE.mono};
@@ -493,7 +503,7 @@ class ChatMessageCard(QFrame):
         tc_layout.setContentsMargins(0, 0, 0, 0)
         tc_layout.setSpacing(6)
 
-        self.btn_thought_toggle = QPushButton("Рассуждение")
+        self.btn_thought_toggle = QPushButton(tr_ui("Рассуждение", "Reasoning"))
         self.btn_thought_toggle.setIcon(get_icon("chevron-right", COLORS.signal_cyan, 13))
         self.btn_thought_toggle.setIconSize(QSize(13, 13))
         self.btn_thought_toggle.setCheckable(True)
@@ -4014,11 +4024,13 @@ class CapriCyberdeckWindow(QWidget):
         lp_layout.addWidget(self.sidebar_brand_row)
 
         # Primary CTA: New Chat (Signature Crimson Red accent + inline right-aligned Ctrl N keycap)
-        self.btn_new_session = QPushButton("Новый чат")
+        self.btn_new_session = QPushButton(tr_ui("Новый чат", "New Chat", self.config))
         self.btn_new_session.setIcon(get_icon("plus", "#FFFFFF", 15, stroke_width=2.1))
         self.btn_new_session.setIconSize(QSize(15, 15))
         self.btn_new_session.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_new_session.setToolTip("Начать новую чистую сессию диалога (/new, Ctrl+N)")
+        self.btn_new_session.setToolTip(
+            tr_ui("Начать новую чистую сессию диалога (/new, Ctrl+N)", "Start a clean new chat session (/new, Ctrl+N)", self.config)
+        )
         self.btn_new_session.setFixedHeight(38)
         self.btn_new_session.setStyleSheet(crimson_cta_qss("0px 12px", radius=11))
         cta_badge_lay = QHBoxLayout(self.btn_new_session)
@@ -4035,7 +4047,7 @@ class CapriCyberdeckWindow(QWidget):
 
         # Full-history SQLite search input with right-aligned Ctrl K keycap
         self.search_session_input = QLineEdit()
-        self.search_session_input.setPlaceholderText("Поиск диалогов...")
+        self.search_session_input.setPlaceholderText(tr_ui("Поиск диалогов...", "Search chats...", self.config))
         self.search_session_input.addAction(
             get_icon("search", COLORS.text_muted, 14),
             QLineEdit.ActionPosition.LeadingPosition,
@@ -4136,7 +4148,8 @@ class CapriCyberdeckWindow(QWidget):
         lbl_syn_icon.setPixmap(get_icon("layers", COLORS.text_primary, 14).pixmap(14, 14))
         sync_row.addWidget(lbl_syn_icon)
 
-        lbl_syn_header = QLabel("Энграмма")
+        lbl_syn_header = QLabel(tr_ui("Энграмма", "Engram", self.config))
+        self.lbl_syn_header = lbl_syn_header
         lbl_syn_header.setStyleSheet(
             f"color: {COLORS.text_primary}; font-family: {TYPE.sans}; font-size: 12px; font-weight: 700;"
         )
@@ -4161,7 +4174,7 @@ class CapriCyberdeckWindow(QWidget):
         dot_stage.setStyleSheet(f"background: {COLORS.signal_cyan}; border-radius: 3px; border: none;")
         stage_row.addWidget(dot_stage)
 
-        self.lbl_stage = ElidingLabel(self.emotions.relationship_stage_label, hud_box)
+        self.lbl_stage = ElidingLabel(self.emotions.get_relationship_stage_label(resolve_ui_lang(self.config)), hud_box)
         self.lbl_stage.setStyleSheet(
             f"color: {COLORS.text_primary}; font-family: {TYPE.sans}; font-size: 11px; font-weight: 600;"
         )
@@ -4174,7 +4187,7 @@ class CapriCyberdeckWindow(QWidget):
         live_grid.setHorizontalSpacing(6)
         live_grid.setVerticalSpacing(4)
 
-        def _mk_icon_key(icon_name: str, txt: str) -> QWidget:
+        def _mk_icon_key(icon_name: str, txt: str) -> tuple[QWidget, QLabel]:
             row_w = QWidget(hud_box)
             row_w.setStyleSheet("background: transparent; border: none;")
             rl = QHBoxLayout(row_w)
@@ -4187,7 +4200,7 @@ class CapriCyberdeckWindow(QWidget):
             lb.setStyleSheet(f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 11px;")
             rl.addWidget(lb)
             rl.addStretch()
-            return row_w
+            return row_w, lb
 
         def _mk_metric_val(txt: str, color: str = COLORS.text_primary) -> QLabel:
             lbl = QLabel(txt)
@@ -4198,14 +4211,17 @@ class CapriCyberdeckWindow(QWidget):
             return lbl
 
         self.lbl_metric_context = _mk_metric_val("0")
-        self.lbl_metric_memory = _mk_metric_val("0 фактов")
-        self.lbl_metric_tools = _mk_metric_val("0 активны", COLORS.amber)
+        self.lbl_metric_memory = _mk_metric_val(format_facts(0, config=self.config))
+        self.lbl_metric_tools = _mk_metric_val(format_active_tools(0, config=self.config), COLORS.amber)
 
-        live_grid.addWidget(_mk_icon_key("cpu", "Контекст"), 0, 0)
+        row_ctx, self.lbl_key_context = _mk_icon_key("cpu", tr_ui("Контекст", "Context", self.config))
+        row_mem, self.lbl_key_memory = _mk_icon_key("memory", tr_ui("Память", "Memory", self.config))
+        row_tls, self.lbl_key_tools = _mk_icon_key("terminal", tr_ui("Инструменты", "Tools", self.config))
+        live_grid.addWidget(row_ctx, 0, 0)
         live_grid.addWidget(self.lbl_metric_context, 0, 1)
-        live_grid.addWidget(_mk_icon_key("memory", "Память"), 1, 0)
+        live_grid.addWidget(row_mem, 1, 0)
         live_grid.addWidget(self.lbl_metric_memory, 1, 1)
-        live_grid.addWidget(_mk_icon_key("terminal", "Инструменты"), 2, 0)
+        live_grid.addWidget(row_tls, 2, 0)
         live_grid.addWidget(self.lbl_metric_tools, 2, 1)
         hb_layout.addLayout(live_grid)
 
@@ -4215,7 +4231,7 @@ class CapriCyberdeckWindow(QWidget):
         hud_sep.setStyleSheet(f"background: {COLORS.border_hairline}; border: none;")
         hb_layout.addWidget(hud_sep)
 
-        self.lbl_mood = QLabel("Настроение: Игривое")
+        self.lbl_mood = QLabel(tr_ui("Настроение: Игривое", "Mood: Playful", self.config))
         self.lbl_mood.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.sans}; font-size: 10px;"
         )
@@ -4223,11 +4239,11 @@ class CapriCyberdeckWindow(QWidget):
 
         metrics_row = QHBoxLayout()
         metrics_row.setSpacing(6)
-        self.lbl_trust = QLabel("Доверие +25")
+        self.lbl_trust = QLabel(tr_ui("Доверие +25", "Trust +25", self.config))
         self.lbl_trust.setStyleSheet(
             f"color: {COLORS.mint}; font-family: {TYPE.mono}; font-size: 10px;"
         )
-        self.lbl_irrit = QLabel("Шум 0%")
+        self.lbl_irrit = QLabel(tr_ui("Шум 0%", "Noise 0%", self.config))
         self.lbl_irrit.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10px;"
         )
@@ -4266,16 +4282,16 @@ class CapriCyberdeckWindow(QWidget):
             }}
         """
 
-        self.btn_sessions = QPushButton("Сессии")
+        self.btn_sessions = QPushButton(tr_ui("Сессии", "Sessions", self.config))
         self.btn_sessions.setIcon(get_icon("sessions", COLORS.text_secondary, 13))
         self.btn_sessions.setIconSize(QSize(13, 13))
         self.btn_sessions.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_sessions.setToolTip("Архив и резервные копии диалогов (/sessions)")
+        self.btn_sessions.setToolTip(tr_ui("Архив и резервные копии диалогов (/sessions)", "Chat history & backups (/sessions)", self.config))
         self.btn_sessions.setStyleSheet(pill_nav_qss)
         self.btn_sessions.clicked.connect(self._show_sessions_dialog)
         primary_nav.addWidget(self.btn_sessions, stretch=1)
 
-        self.btn_memory_wb = QPushButton("Память")
+        self.btn_memory_wb = QPushButton(tr_ui("Память", "Memory", self.config))
         self.btn_memory_wb.setIcon(get_icon("memory", COLORS.text_secondary, 13))
         self.btn_memory_wb.setIconSize(QSize(13, 13))
         self.btn_memory_wb.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -4624,21 +4640,21 @@ class CapriCyberdeckWindow(QWidget):
         mem_text_col.addWidget(self.lbl_mem_cand_text)
         mem_bar_layout.addLayout(mem_text_col, stretch=1)
 
-        self.btn_mem_approve = QPushButton("Запомнить")
+        self.btn_mem_approve = QPushButton(tr_ui("Запомнить", "Save", self.config))
         self.btn_mem_approve.setMinimumHeight(28)
         self.btn_mem_approve.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_mem_approve.setStyleSheet(button_primary_qss("4px 11px"))
         self.btn_mem_approve.clicked.connect(self._on_approve_pending_memory)
         mem_bar_layout.addWidget(self.btn_mem_approve)
 
-        self.btn_mem_edit = QPushButton("Править")
+        self.btn_mem_edit = QPushButton(tr_ui("Править", "Edit", self.config))
         self.btn_mem_edit.setMinimumHeight(28)
         self.btn_mem_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_mem_edit.setStyleSheet(button_secondary_qss("4px 10px"))
         self.btn_mem_edit.clicked.connect(self._on_edit_pending_memory)
         mem_bar_layout.addWidget(self.btn_mem_edit)
 
-        self.btn_mem_reject = QPushButton("Отклонить")
+        self.btn_mem_reject = QPushButton(tr_ui("Отклонить", "Dismiss", self.config))
         self.btn_mem_reject.setMinimumHeight(28)
         self.btn_mem_reject.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_mem_reject.setStyleSheet(button_danger_qss(filled=False, padding="4px 10px"))
@@ -4659,7 +4675,9 @@ class CapriCyberdeckWindow(QWidget):
         capsule_layout.addWidget(self.attachment_strip)
 
         self.input_field = ComposerTextEdit(self.composer_capsule, min_height=34, max_height=136)
-        self.input_field.setPlaceholderText("Написать Капри...   / для команд")
+        self.input_field.setPlaceholderText(
+            tr_ui("Написать Капри...   / для команд", "Message Capri...   / for commands", self.config)
+        )
         self.input_field.returnPressed.connect(self._send_message)
         self.input_field.focusChanged.connect(self._on_composer_focus_changed)
         self.input_field.voiceShortcutPressed.connect(self._toggle_voice_input)
@@ -4717,7 +4735,13 @@ class CapriCyberdeckWindow(QWidget):
         hint_slot_layout.setContentsMargins(4, 0, 4, 0)
         hint_slot_layout.setSpacing(0)
 
-        self.lbl_composer_hint = ElidingLabel("Enter — отправить · Shift+Enter — перенос · Ctrl+M — голос")
+        self.lbl_composer_hint = ElidingLabel(
+            tr_ui(
+                "Enter — отправить · Shift+Enter — перенос · Ctrl+M — голос",
+                "Enter — send · Shift+Enter — newline · Ctrl+M — voice",
+                self.config,
+            )
+        )
         self.lbl_composer_hint.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10px;"
         )
@@ -4767,10 +4791,16 @@ class CapriCyberdeckWindow(QWidget):
             self.memory_candidate_bar.setVisible(False)
             return
         cand = pending[0]
-        ret_lbl = "ВРЕМЕННО 72Ч" if cand.retention == "ephemeral" else "ПОСТОЯННО"
-        cat_lbl = CATEGORY_LABELS.get(cand.category, cand.category)
+        lang = resolve_ui_lang(self.config)
+        ret_lbl = (
+            tr_ui("ВРЕМЕННО 72Ч", "72H TEMP", lang=lang)
+            if cand.retention == "ephemeral"
+            else tr_ui("ПОСТОЯННО", "PERMANENT", lang=lang)
+        )
+        cat_lbl = category_label(cand.category, CATEGORY_LABELS, lang=lang)
+        hdr_prefix = tr_ui("ЗАПОМНИТЬ?", "REMEMBER?", lang=lang)
         self.lbl_mem_cand_badge.setText(
-            f"ЗАПОМНИТЬ? ({1}/{len(pending)}) · {ret_lbl} · {cat_lbl.upper()}"
+            f"{hdr_prefix} ({1}/{len(pending)}) · {ret_lbl} · {cat_lbl.upper()}"
         )
         self.lbl_mem_cand_text.setText(f"[{cand.key}]: {cand.fact}")
         tooltip = f"ID: {cand.id}"
@@ -4855,13 +4885,27 @@ class CapriCyberdeckWindow(QWidget):
 
     def _composer_hint_for_width(self, ws_w: int) -> str:
         if ws_w >= 760:
-            return "Enter — отправить · Shift+Enter — перенос · Ctrl+V — скрин · Ctrl+M — голос"
-        return "Enter — отправить · Shift+Enter — перенос"
+            return tr_ui(
+                "Enter — отправить · Shift+Enter — перенос · Ctrl+V — скрин · Ctrl+M — голос",
+                "Enter — send · Shift+Enter — newline · Ctrl+V — screenshot · Ctrl+M — voice",
+                self.config,
+            )
+        return tr_ui(
+            "Enter — отправить · Shift+Enter — перенос",
+            "Enter — send · Shift+Enter — newline",
+            self.config,
+        )
 
     def _apply_composer_state(self):
         ws_w = self._workspace_width()
         if self._composer_recording:
-            self.lbl_composer_hint.setText("Идёт запись речи · клик или Esc для отмены")
+            self.lbl_composer_hint.setText(
+                tr_ui(
+                    "Идёт запись речи · клик или Esc для отмены",
+                    "Recording speech · click or Esc to cancel",
+                    self.config,
+                )
+            )
             self.lbl_composer_hint.setStyleSheet(
                 f"color: {COLORS.coral}; font-family: {TYPE.mono}; font-size: 10px; font-weight: 600;"
             )
@@ -5265,9 +5309,9 @@ class CapriCyberdeckWindow(QWidget):
 
         # Tighten composer slightly on very short tiles (360px height)
         self.input_field.setPlaceholderText(
-            "Написать Капри..."
+            tr_ui("Написать Капри...", "Message Capri...", self.config)
             if is_narrow
-            else "Написать Капри...   / для команд"
+            else tr_ui("Написать Капри...   / для команд", "Message Capri...   / for commands", self.config)
         )
         if is_compact_h:
             self.input_field.set_height_bounds(32, 72)
@@ -5354,8 +5398,14 @@ class CapriCyberdeckWindow(QWidget):
 
             current_id = getattr(self.agent, "current_session_id", None)
 
+            lang = resolve_ui_lang(self.config)
             if not sessions:
-                empty_item = QListWidgetItem("Ничего не найдено" if query else "Нет сохранённых диалогов")
+                empty_txt = (
+                    tr_ui("Ничего не найдено", "No matches found", lang=lang)
+                    if query
+                    else tr_ui("Нет сохранённых диалогов", "No saved chats", lang=lang)
+                )
+                empty_item = QListWidgetItem(empty_txt)
                 empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
                 empty_item.setForeground(QColor(COLORS.text_muted))
                 self.session_list_widget.addItem(empty_item)
@@ -5366,20 +5416,23 @@ class CapriCyberdeckWindow(QWidget):
             today_start = time.mktime((local_now.tm_year, local_now.tm_mon, local_now.tm_mday, 0, 0, 0, 0, 0, -1))
             seven_days_ago = today_start - (6 * 86400)
 
+            k_today = tr_ui("СЕГОДНЯ", "TODAY", lang=lang)
+            k_week = tr_ui("ПОСЛЕДНИЕ 7 ДНЕЙ", "LAST 7 DAYS", lang=lang)
+            k_older = tr_ui("РАНЕЕ", "EARLIER", lang=lang)
             groups = {
-                "СЕГОДНЯ": [],
-                "ПОСЛЕДНИЕ 7 ДНЕЙ": [],
-                "РАНЕЕ": [],
+                k_today: [],
+                k_week: [],
+                k_older: [],
             }
 
             for s in sessions:
                 ts = s.updated_at or s.created_at or 0
                 if ts >= today_start:
-                    groups["СЕГОДНЯ"].append(s)
+                    groups[k_today].append(s)
                 elif ts >= seven_days_ago:
-                    groups["ПОСЛЕДНИЕ 7 ДНЕЙ"].append(s)
+                    groups[k_week].append(s)
                 else:
-                    groups["РАНЕЕ"].append(s)
+                    groups[k_older].append(s)
 
             active_item = None
             for group_name, group_sessions in groups.items():
@@ -5793,28 +5846,52 @@ class CapriCyberdeckWindow(QWidget):
 
             threading.Thread(target=_speak_async, args=(rec.content,), daemon=True).start()
 
+    def _apply_ui_language(self) -> None:
+        """Live-update visible Cyberdeck chrome when switching `/lang ru|en`."""
+        cfg = self.config
+        self.btn_new_session.setText(tr_ui("Новый чат", "New Chat", cfg))
+        self.search_session_input.setPlaceholderText(tr_ui("Поиск диалогов...", "Search chats...", cfg))
+        if hasattr(self, "lbl_syn_header"):
+            self.lbl_syn_header.setText(tr_ui("Энграмма", "Engram", cfg))
+        if hasattr(self, "lbl_key_context"):
+            self.lbl_key_context.setText(tr_ui("Контекст", "Context", cfg))
+        if hasattr(self, "lbl_key_memory"):
+            self.lbl_key_memory.setText(tr_ui("Память", "Memory", cfg))
+        if hasattr(self, "lbl_key_tools"):
+            self.lbl_key_tools.setText(tr_ui("Инструменты", "Tools", cfg))
+        self.btn_sessions.setText(tr_ui("Сессии", "Sessions", cfg))
+        self.btn_memory_wb.setText(tr_ui("Память", "Memory", cfg))
+        self.btn_mem_approve.setText(tr_ui("Запомнить", "Save", cfg))
+        self.btn_mem_edit.setText(tr_ui("Править", "Edit", cfg))
+        self.btn_mem_reject.setText(tr_ui("Отклонить", "Dismiss", cfg))
+        is_narrow = self.width() < 660
+        self.input_field.setPlaceholderText(
+            tr_ui("Написать Капри...", "Message Capri...", cfg)
+            if is_narrow
+            else tr_ui("Написать Капри...   / для команд", "Message Capri...   / for commands", cfg)
+        )
+        self._apply_composer_state()
+        self._refresh_memory_candidate_bar()
+        self._refresh_sidebar_sessions()
+        self.refresh_stats()
+
     def refresh_stats(self):
         self.emotions.load()
         trust = self.emotions.trust
         irrit = self.emotions.irritation
         mood = self.emotions.mood
+        lang = resolve_ui_lang(self.config)
 
-        mood_ru = {
-            "playful": "Игривое / Озорное",
-            "warm": "Тёплое / Лояльное",
-            "sarcastic": "Саркастичное",
-            "annoyed": "Раздражённое",
-            "neutral": "Спокойное",
-        }.get(mood, mood)
+        mood_txt = mood_label(mood, detailed=True, lang=lang)
 
         sync_pct = max(10, min(100, int(((trust + 100) / 200.0) * 100)))
         self.bar_engram.setValue(sync_pct)
         self.lbl_engram_pct.setText(f"{sync_pct}%")
 
-        self.lbl_stage.setText(self.emotions.relationship_stage_label)
-        self.lbl_mood.setText(f"Настроение: {mood_ru}")
-        self.lbl_trust.setText(f"Доверие {trust:+d}")
-        self.lbl_irrit.setText(f"Раздражение {irrit}%")
+        self.lbl_stage.setText(self.emotions.get_relationship_stage_label(lang))
+        self.lbl_mood.setText(f"{tr_ui('Настроение', 'Mood', lang=lang)}: {mood_txt}")
+        self.lbl_trust.setText(f"{tr_ui('Доверие', 'Trust', lang=lang)} {trust:+d}")
+        self.lbl_irrit.setText(f"{tr_ui('Раздражение', 'Irritation', lang=lang)} {irrit}%")
         self.lbl_irrit.setStyleSheet(
             f"color: {COLORS.amber if irrit > 25 else COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10px;"
         )
@@ -5824,7 +5901,7 @@ class CapriCyberdeckWindow(QWidget):
                 cur_sess = self.agent.session_manager.get_session(self.agent.current_session_id)
                 if cur_sess:
                     self.lbl_active_session_title.setText(cur_sess.title)
-                    self.lbl_turn_counter.setText(_format_rounds_ru(cur_sess.turn_count))
+                    self.lbl_turn_counter.setText(_format_rounds_ru(cur_sess.turn_count, lang=lang))
                     if hasattr(self, "lbl_metric_context"):
                         self.lbl_metric_context.setText(str(cur_sess.turn_count))
             except Exception:
@@ -5834,13 +5911,12 @@ class CapriCyberdeckWindow(QWidget):
                 if mem_store is not None and hasattr(self, "lbl_metric_memory"):
                     saved_cnt = len(mem_store.entries)
                     pend_cnt = len(mem_store.list_pending())
-                    label = f"{saved_cnt} фактов (+{pend_cnt})" if pend_cnt else f"{saved_cnt} фактов"
-                    self.lbl_metric_memory.setText(label)
+                    self.lbl_metric_memory.setText(format_facts(saved_cnt, pend_cnt, lang=lang))
             except Exception:
                 pass
         if hasattr(self, "lbl_metric_tools"):
             try:
-                self.lbl_metric_tools.setText(f"{len(registry.get_schemas())} активны")
+                self.lbl_metric_tools.setText(format_active_tools(len(registry.get_schemas()), lang=lang))
             except Exception:
                 pass
 
@@ -6496,9 +6572,26 @@ class CapriCyberdeckWindow(QWidget):
                 "• /wake [on|off] — Wake-Word («Капри»)\n"
                 "• /bargein [on|off] — Hands-Free перебивание речи Капри голосом\n"
                 "• Горячие клавиши: Enter (отправить), Shift+Enter (перенос), Ctrl+V (скриншот), Ctrl+M (голос), Esc (стоп)\n"
-                "• /tools, /clear, /privacy, /changelog, /exit"
+                "• /tools, /lang [ru|en], /clear, /privacy, /changelog, /exit"
             )
             self._append_message("Система", help_text)
+            return
+
+        if cmd in ("/lang", "/language"):
+            sub = parts[1].strip().lower() if len(parts) > 1 else ""
+            if sub in ("en", "ru"):
+                self.config.ui.language = sub
+                os.environ["CAPRI_UI_LANG"] = sub
+                save_config(self.config)
+                self._apply_ui_language()
+                msg = "UI language switched to English (`en`)." if sub == "en" else "Язык интерфейса переключён на русский (`ru`)."
+                self._append_message("System" if sub == "en" else "Система", msg)
+            else:
+                cur = resolve_ui_lang(self.config)
+                self._append_message(
+                    "System" if cur == "en" else "Система",
+                    f"Current UI language: `{cur}`. Usage: `/lang en` or `/lang ru`.",
+                )
             return
 
         if cmd in ("/mood", "/rel", "/relationship"):

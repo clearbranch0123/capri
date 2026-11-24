@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from ..core.emotions import EmotionEngine
 from ..core.config import load_config, save_config
 from ..core.resources import get_assets_dir
+from .i18n import format_active_tools, format_facts, mood_label, resolve_ui_lang, tr_ui
 from .icons import get_icon
 from .theme import (
     COLORS,
@@ -127,7 +128,7 @@ class CapriRelicDashboard(QWidget):
         btn_close.setFixedSize(30, 30)
         btn_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_close.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_close.setToolTip("Скрыть Relic Construct")
+        btn_close.setToolTip(tr_ui("Скрыть Relic Construct", "Hide Relic Construct", self.config))
         btn_close.setStyleSheet(
             button_ghost_qss(
                 text_color=COLORS.text_muted,
@@ -157,7 +158,7 @@ class CapriRelicDashboard(QWidget):
 
         sync_top = QHBoxLayout()
         sync_top.setSpacing(8)
-        lbl_sync_tag = QLabel("СИНХРОНИЗАЦИЯ ЭНГРАММЫ")
+        lbl_sync_tag = QLabel(tr_ui("СИНХРОНИЗАЦИЯ ЭНГРАММЫ", "ENGRAM SYNCHRONIZATION", self.config))
         lbl_sync_tag.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10px; font-weight: 700; letter-spacing: 0.9px;"
         )
@@ -176,14 +177,20 @@ class CapriRelicDashboard(QWidget):
         hc_lay.addWidget(self.bar_sync)
 
         user_name = getattr(getattr(self.config, "companion", None), "user_name", "User") or "User"
-        self.lbl_quote = QLabel(f"«На связи, {user_name}. Энграмма синхронизирована и развёрнута в системе.»")
+        self.lbl_quote = QLabel(
+            tr_ui(
+                f"«На связи, {user_name}. Энграмма синхронизирована и развёрнута в системе.»",
+                f"“Online, {user_name}. Engram synchronized and deployed on the system.”",
+                self.config,
+            )
+        )
         self.lbl_quote.setWordWrap(True)
         self.lbl_quote.setStyleSheet(
             f"color: {COLORS.text_secondary}; font-family: {TYPE.sans}; font-size: 12.5px; line-height: 1.42;"
         )
         hc_lay.addWidget(self.lbl_quote)
 
-        self.lbl_stage_line = QLabel("Синхронизированная энграмма")
+        self.lbl_stage_line = QLabel(tr_ui("Синхронизированная энграмма", "Bonded Engram", self.config))
         self.lbl_stage_line.setStyleSheet(
             f"color: {COLORS.signal_cyan}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 600;"
         )
@@ -239,10 +246,34 @@ class CapriRelicDashboard(QWidget):
         tiles_grid.setHorizontalSpacing(10)
         tiles_grid.setVerticalSpacing(10)
 
-        self.tile_trust = RelicTelemetryTile("heart", f"Доверие к {user_name}", "+25 / 100", COLORS.mint, self)
-        self.tile_mood = RelicTelemetryTile("activity", "Настроение и шум", "Спокойное · 0%", COLORS.crimson_hover, self)
-        self.tile_memory = RelicTelemetryTile("memory", "Банк памяти", "0 фактов", COLORS.signal_cyan, self)
-        self.tile_tools = RelicTelemetryTile("terminal", "Инструменты", "0 активны", COLORS.amber, self)
+        self.tile_trust = RelicTelemetryTile(
+            "heart",
+            tr_ui(f"Доверие к {user_name}", f"Trust in {user_name}", self.config),
+            "+25 / 100",
+            COLORS.mint,
+            self,
+        )
+        self.tile_mood = RelicTelemetryTile(
+            "activity",
+            tr_ui("Настроение и шум", "Mood & Noise", self.config),
+            tr_ui("Спокойное · 0%", "Calm · 0%", self.config),
+            COLORS.crimson_hover,
+            self,
+        )
+        self.tile_memory = RelicTelemetryTile(
+            "memory",
+            tr_ui("Банк памяти", "Memory Bank", self.config),
+            format_facts(0, config=self.config),
+            COLORS.signal_cyan,
+            self,
+        )
+        self.tile_tools = RelicTelemetryTile(
+            "terminal",
+            tr_ui("Инструменты", "Tools", self.config),
+            format_active_tools(0, config=self.config),
+            COLORS.amber,
+            self,
+        )
 
         # Preserve compatibility attributes for callers/tests inspecting telemetry labels
         self.lbl_trust = self.tile_trust.lbl_value
@@ -372,23 +403,18 @@ class CapriRelicDashboard(QWidget):
         trust = self.emotions.trust
         irrit = self.emotions.irritation
         mood = self.emotions.mood
+        lang = resolve_ui_lang(self.config)
 
-        mood_ru = {
-            "playful": "Игривое",
-            "warm": "Тёплое",
-            "sarcastic": "Саркастичное",
-            "annoyed": "Раздражённое",
-            "neutral": "Спокойное",
-        }.get(mood, mood)
+        mood_txt = mood_label(mood, detailed=False, lang=lang)
 
         sync_pct = max(10, min(100, int(((trust + 100) / 200.0) * 100)))
         self.lbl_sync_val.setText(f"{sync_pct}%")
         self.bar_sync.setValue(sync_pct)
-        self.lbl_stage_line.setText(self.emotions.relationship_stage_label)
+        self.lbl_stage_line.setText(self.emotions.get_relationship_stage_label(lang))
 
         self.tile_trust.set_value(f"{trust:+d} / 100", COLORS.mint)
         mood_col = COLORS.amber if irrit > 25 else COLORS.text_primary
-        self.tile_mood.set_value(f"{mood_ru} · {irrit}%", mood_col)
+        self.tile_mood.set_value(f"{mood_txt} · {irrit}%", mood_col)
 
         try:
             from ..core.memory import MemoryStore
@@ -400,8 +426,8 @@ class CapriRelicDashboard(QWidget):
             tools_cnt = len(registry.get_schemas())
         except Exception:
             tools_cnt = 0
-        self.tile_memory.set_value(f"{mem_cnt} фактов", COLORS.signal_cyan)
-        self.tile_tools.set_value(f"{tools_cnt} активны", COLORS.amber)
+        self.tile_memory.set_value(format_facts(mem_cnt, lang=lang), COLORS.signal_cyan)
+        self.tile_tools.set_value(format_active_tools(tools_cnt, lang=lang), COLORS.amber)
 
         prov = (self.config.llm.provider or "GROQ").upper()
         try:

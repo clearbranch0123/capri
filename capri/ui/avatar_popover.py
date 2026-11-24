@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .i18n import resolve_ui_lang, tr_ui
 from .theme import COLORS as P, TYPE as T, apply_dark_palette
 
 
@@ -311,6 +312,8 @@ class CapriAvatarQuickPopover(QWidget):
         lay.setSpacing(8)
 
         # ── 1. Compact Header ───────────────────────────────────────────────
+        lang = resolve_ui_lang()
+        self._lang = lang
         hdr = QHBoxLayout()
         hdr.setSpacing(6)
         dot = QLabel(self.card)
@@ -319,14 +322,14 @@ class CapriAvatarQuickPopover(QWidget):
         brand.setObjectName("popoverBrand")
         self.lbl_state = QLabel("IDLE", self.card)
         self.lbl_state.setObjectName("popoverStateBadge")
-        self.btn_hud = QPushButton("◈ Релик", self.card)
+        self.btn_hud = QPushButton(tr_ui("◈ Релик", "◈ Relic", lang=lang), self.card)
         self.btn_hud.setObjectName("popoverRelicBtn")
         self.btn_hud.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_hud.setToolTip("Открыть окно Capri Relic Construct")
+        self.btn_hud.setToolTip(tr_ui("Открыть окно Capri Relic Construct", "Open Capri Relic Construct", lang=lang))
         self.btn_close = QPushButton("✕", self.card)
         self.btn_close.setObjectName("popoverCloseBtn")
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close.setToolTip("Закрыть меню")
+        self.btn_close.setToolTip(tr_ui("Закрыть меню", "Close menu", lang=lang))
 
         hdr.addWidget(dot)
         hdr.addWidget(brand)
@@ -337,7 +340,7 @@ class CapriAvatarQuickPopover(QWidget):
         lay.addLayout(hdr)
 
         # ── 2. 1-Click Pose Chips (only real available animations; 'Лежать' auto-shows if lounge.png exists)
-        lbl_poses = QLabel("ПОЗЫ", self.card)
+        lbl_poses = QLabel(tr_ui("ПОЗЫ", "POSES", lang=lang), self.card)
         lbl_poses.setObjectName("popoverSection")
         lay.addWidget(lbl_poses)
 
@@ -345,10 +348,10 @@ class CapriAvatarQuickPopover(QWidget):
         self.pose_grid.setSpacing(6)
         self.pose_buttons: dict[str, QPushButton] = {}
         pose_specs = [
-            ("perch", "Сидеть", 0, 0),
-            ("dance", "Танец", 0, 1),
-            ("sleep", "Сон", 0, 2),
-            ("lounge", "Лежать", 1, 0),
+            ("perch", tr_ui("Сидеть", "Perch", lang=lang), 0, 0),
+            ("dance", tr_ui("Танец", "Dance", lang=lang), 0, 1),
+            ("sleep", tr_ui("Сон", "Sleep", lang=lang), 0, 2),
+            ("lounge", tr_ui("Лежать", "Lounge", lang=lang), 1, 0),
         ]
         for key, title, r, c in pose_specs:
             btn = QPushButton(title, self.card)
@@ -366,18 +369,18 @@ class CapriAvatarQuickPopover(QWidget):
         lay.addWidget(div1)
 
         # ── 3. Clean Behavior Switch Rows ───────────────────────────────────
-        lbl_beh = QLabel("ПОВЕДЕНИЕ", self.card)
+        lbl_beh = QLabel(tr_ui("ПОВЕДЕНИЕ", "BEHAVIOR", lang=lang), self.card)
         lbl_beh.setObjectName("popoverSection")
         lay.addWidget(lbl_beh)
 
         switches_box = QVBoxLayout()
         switches_box.setSpacing(2)
-        self.row_physics = _SwitchRowButton("Физика и гравитация", self.card)
-        self.row_autonomous = _SwitchRowButton("Свободная жизнь", self.card)
-        self.row_follow = _SwitchRowButton("Следовать за окном", self.card)
-        self.row_auto_poses = _SwitchRowButton("Авто-позы (музыка / сон)", self.card)
+        self.row_physics = _SwitchRowButton(tr_ui("Физика и гравитация", "Physics & gravity", lang=lang), self.card)
+        self.row_autonomous = _SwitchRowButton(tr_ui("Свободная жизнь", "Autonomous life", lang=lang), self.card)
+        self.row_follow = _SwitchRowButton(tr_ui("Следовать за окном", "Follow active window", lang=lang), self.card)
+        self.row_auto_poses = _SwitchRowButton(tr_ui("Авто-позы (музыка / сон)", "Auto-poses (music / sleep)", lang=lang), self.card)
         self.row_game_mode = _SwitchRowButton("Game Mode", self.card)
-        self.row_monitor = _SwitchRowButton("Монитор", self.card)
+        self.row_monitor = _SwitchRowButton(tr_ui("Монитор", "Monitor", lang=lang), self.card)
         self.row_monitor.setVisible(False)
         for row in (
             self.row_physics,
@@ -395,24 +398,24 @@ class CapriAvatarQuickPopover(QWidget):
         lay.addWidget(div2)
 
         # ── 4. Quick Action Footer ──────────────────────────────────────────
-        self.btn_quick_ask = QPushButton("⚡ Быстрый вопрос", self.card)
+        self.btn_quick_ask = QPushButton(tr_ui("⚡ Быстрый вопрос", "⚡ Quick Ask", lang=lang), self.card)
         self.btn_quick_ask.setObjectName("popoverAskBtn")
         self.btn_quick_ask.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_quick_ask.setToolTip("Открыть компактную строку быстрого вопроса (capri-deck --ask)")
+        self.btn_quick_ask.setToolTip(tr_ui("Открыть компактную строку быстрого вопроса (capri-deck --ask)", "Open compact Quick Ask bar (capri-deck --ask)", lang=lang))
         lay.addWidget(self.btn_quick_ask)
 
         quick_row = QHBoxLayout()
         quick_row.setSpacing(6)
-        self.btn_voice = QPushButton("🎙 Голос", self.card)
+        self.btn_voice = QPushButton(tr_ui("🎙 Голос", "🎙 Voice", lang=lang), self.card)
         self.btn_voice.setObjectName("popoverVoiceBtn")
         self.btn_voice.setProperty("active", "false")
         self.btn_voice.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_voice.setToolTip("Начать голосовой ввод или остановить речь Капри")
+        self.btn_voice.setToolTip(tr_ui("Начать голосовой ввод или остановить речь Капри", "Start voice input or stop Capri speech", lang=lang))
 
-        self.btn_look_region = QPushButton("👁 Область", self.card)
+        self.btn_look_region = QPushButton(tr_ui("👁 Область", "👁 Region", lang=lang), self.card)
         self.btn_look_region.setObjectName("popoverLookBtn")
         self.btn_look_region.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_look_region.setToolTip("Выделить область экрана и спросить Капри (slurp + grim)")
+        self.btn_look_region.setToolTip(tr_ui("Выделить область экрана и спросить Капри (slurp + grim)", "Capture screen region (slurp + grim)", lang=lang))
 
         quick_row.addWidget(self.btn_voice, 1)
         quick_row.addWidget(self.btn_look_region, 1)
@@ -420,17 +423,17 @@ class CapriAvatarQuickPopover(QWidget):
 
         footer = QHBoxLayout()
         footer.setSpacing(6)
-        self.btn_home = QPushButton("На базу", self.card)
+        self.btn_home = QPushButton(tr_ui("На базу", "Go Home", lang=lang), self.card)
         self.btn_home.setObjectName("popoverFooterBtn")
         self.btn_home.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_pin = QPushButton("Закрепить тут", self.card)
+        self.btn_pin = QPushButton(tr_ui("Закрепить тут", "Pin Here", lang=lang), self.card)
         self.btn_pin.setObjectName("popoverFooterBtn")
         self.btn_pin.setCursor(Qt.CursorShape.PointingHandCursor)
         footer.addWidget(self.btn_home, 1)
         footer.addWidget(self.btn_pin, 1)
         lay.addLayout(footer)
 
-        self.btn_quit_avatar = QPushButton("Выключить аватар", self.card)
+        self.btn_quit_avatar = QPushButton(tr_ui("Выключить аватар", "Close Avatar", lang=lang), self.card)
         self.btn_quit_avatar.setObjectName("popoverQuitBtn")
         self.btn_quit_avatar.setCursor(Qt.CursorShape.PointingHandCursor)
         lay.addWidget(self.btn_quit_avatar)
@@ -487,7 +490,8 @@ class CapriAvatarQuickPopover(QWidget):
             self.lbl_state.setText("LIVE")
 
         voice_busy = st_norm in ("listening", "speaking")
-        self.btn_voice.setText("⏹ Стоп" if voice_busy else "🎙 Голос")
+        lang = getattr(self, "_lang", resolve_ui_lang())
+        self.btn_voice.setText(tr_ui("⏹ Стоп", "⏹ Stop", lang=lang) if voice_busy else tr_ui("🎙 Голос", "🎙 Voice", lang=lang))
         self.btn_voice.setProperty("active", "true" if voice_busy else "false")
         self.btn_voice.style().unpolish(self.btn_voice)
         self.btn_voice.style().polish(self.btn_voice)
@@ -525,7 +529,7 @@ class CapriAvatarQuickPopover(QWidget):
         else:
             self.row_monitor.setVisible(False)
 
-        self.btn_pin.setText("Открепить" if pinned else "Закрепить тут")
+        self.btn_pin.setText(tr_ui("Открепить", "Unpin", lang=lang) if pinned else tr_ui("Закрепить тут", "Pin Here", lang=lang))
         self.btn_pin.setProperty("pinned", "true" if pinned else "false")
         self.btn_pin.style().unpolish(self.btn_pin)
         self.btn_pin.style().polish(self.btn_pin)

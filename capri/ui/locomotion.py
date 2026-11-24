@@ -47,17 +47,22 @@ GLITCH_DISTANCE_THRESHOLD = 500.0
 
 def play_sound(sound_path: Path):
     """Воспроизводит системный звук через paplay или mpv в отдельном процессе."""
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     if not sound_path.exists():
         return
     try:
+        proc = None
         if shutil.which("paplay"):
-            subprocess.Popen(["paplay", str(sound_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(["paplay", str(sound_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif shutil.which("mpv"):
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["mpv", "--no-config", "--no-video", "--really-quiet", str(sound_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+        if proc is not None:
+            threading.Thread(target=proc.wait, daemon=True).start()
     except Exception:
         pass
 

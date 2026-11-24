@@ -118,6 +118,7 @@ class VisionConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
+    language: str = "ru"  # "ru" or "en"
     avatar_enabled: bool = True
     avatar_mode: str = "2d"  # "2d" or "3d"
     avatar_size: int = 240

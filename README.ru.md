@@ -3,7 +3,7 @@
 🇬🇧 **[English](README.md)** · 🇷🇺 **Русский**
 
 [![Version](https://img.shields.io/badge/version-v3.5.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.5.0)
-[![Tests](https://img.shields.io/badge/Tests-265%2F265%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-267%2F267%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
@@ -20,13 +20,13 @@
 ## 🖼️ Живой аватар и интерфейс Capri (Crimson Graphite)
 
 ### Живой Wayland-аватар в действии (Voice 2.0, Physics, Perch & Quick Controls)
-![Capri Live Spatial Avatar Demo](docs/screenshots/capri-demo.webp)
+![Capri Live Spatial Avatar Demo](docs/screenshots/capri-demo.ru.webp)
 
 ### Cyberdeck
-![Capri Cyberdeck](docs/screenshots/cyberdeck.png)
+![Capri Cyberdeck](docs/screenshots/cyberdeck.ru.png)
 
 ### Relic Construct Dashboard
-![Capri Relic Dashboard](docs/screenshots/relic.png)
+![Capri Relic Dashboard](docs/screenshots/relic.ru.png)
 
 ---
 

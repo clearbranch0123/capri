@@ -24,6 +24,7 @@ mcp:
   enabled: false
   servers: []
 ui:
+  language: ru
   auto_avatar_poses: true
   avatar_autonomous_life: true
   avatar_enabled: true

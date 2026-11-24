@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.attachments import AttachmentItem, cleanup_temp_attachment, save_clipboard_image_bytes
+from .i18n import resolve_ui_lang, tr_ui
 from .theme import COLORS, TYPE, scrollbar_qss
 
 MAX_QUICK_ASK_ATTACHMENTS = 6
@@ -139,8 +140,15 @@ class CapriQuickAskBar(QWidget):
         )
         input_row.addWidget(self.lbl_emblem)
 
+        self._lang = resolve_ui_lang()
         self.input_edit = _QuickAskLineEdit(self.card)
-        self.input_edit.setPlaceholderText("Спросить Капри…  Enter — отправить · Ctrl+V — скрин · Esc — скрыть")
+        self.input_edit.setPlaceholderText(
+            tr_ui(
+                "Спросить Капри…  Enter — отправить · Ctrl+V — скрин · Esc — скрыть",
+                "Ask Capri…  Enter — send · Ctrl+V — screenshot · Esc — hide",
+                lang=self._lang,
+            )
+        )
         self.input_edit.setMinimumHeight(38)
         self.input_edit.setStyleSheet(f"""
             QLineEdit {{
@@ -256,7 +264,7 @@ class CapriQuickAskBar(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(8)
 
-        self.lbl_status = QLabel("ГОТОВО", self.response_panel)
+        self.lbl_status = QLabel(tr_ui("ГОТОВО", "READY", lang=self._lang), self.response_panel)
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.signal_cyan}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
@@ -308,13 +316,13 @@ class CapriQuickAskBar(QWidget):
             }}
         """
 
-        self.btn_copy = QPushButton("Копировать", self.response_panel)
+        self.btn_copy = QPushButton(tr_ui("Копировать", "Copy", lang=self._lang), self.response_panel)
         self.btn_copy.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_copy.setStyleSheet(footer_btn_qss)
         self.btn_copy.clicked.connect(self._on_copy_clicked)
         footer_row.addWidget(self.btn_copy)
 
-        self.btn_collapse = QPushButton("Свернуть", self.response_panel)
+        self.btn_collapse = QPushButton(tr_ui("Свернуть", "Collapse", lang=self._lang), self.response_panel)
         self.btn_collapse.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_collapse.setStyleSheet(footer_btn_qss)
         self.btn_collapse.clicked.connect(self.collapse_response)
@@ -322,7 +330,7 @@ class CapriQuickAskBar(QWidget):
 
         footer_row.addStretch()
 
-        self.btn_open_deck = QPushButton("↗ В Cyberdeck", self.response_panel)
+        self.btn_open_deck = QPushButton(tr_ui("↗ В Cyberdeck", "↗ Cyberdeck", lang=self._lang), self.response_panel)
         self.btn_open_deck.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_open_deck.setStyleSheet(f"""
             QPushButton {{
@@ -678,7 +686,7 @@ class CapriQuickAskBar(QWidget):
                 }}
             """)
             self._set_emblem_color(COLORS.signal_cyan)
-            self.lbl_status.setText("СЛУШАЮ…")
+            self.lbl_status.setText(tr_ui("СЛУШАЮ…", "LISTENING…", lang=self._lang))
             self.response_panel.show()
             self._sync_compact_size()
         else:
@@ -699,9 +707,9 @@ class CapriQuickAskBar(QWidget):
             """)
             if not self._generating:
                 self._set_emblem_color(COLORS.crimson)
-                if self.lbl_status.text() == "СЛУШАЮ…":
+                if self.lbl_status.text() in ("СЛУШАЮ…", "LISTENING…"):
                     if self._raw_response_text:
-                        self.lbl_status.setText("ГОТОВО")
+                        self.lbl_status.setText(tr_ui("ГОТОВО", "READY", lang=self._lang))
                         self.lbl_status.setStyleSheet(
                             f"color: {COLORS.mint}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
                         )
@@ -715,12 +723,12 @@ class CapriQuickAskBar(QWidget):
         self._tools_seen.clear()
         self._apply_send_button_style(generating=True)
         self._set_emblem_color(COLORS.amber)
-        self.lbl_status.setText("ДУМАЮ…")
+        self.lbl_status.setText(tr_ui("ДУМАЮ…", "THINKING…", lang=self._lang))
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.amber}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
         self.lbl_tools.setText("")
-        self.txt_response.setPlainText("Синхронизация нейросети…")
+        self.txt_response.setPlainText(tr_ui("Синхронизация нейросети…", "Synchronizing neural link…", lang=self._lang))
         self.response_panel.show()
         self._sync_compact_size()
 
@@ -741,7 +749,7 @@ class CapriQuickAskBar(QWidget):
         if not text:
             return
         self._raw_response_text = text
-        self.lbl_status.setText("ОТВЕТ…")
+        self.lbl_status.setText(tr_ui("ОТВЕТ…", "STREAMING…", lang=self._lang))
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.signal_cyan}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
@@ -760,7 +768,7 @@ class CapriQuickAskBar(QWidget):
         if text:
             self._raw_response_text = text
             self.txt_response.setPlainText(text)
-        self.lbl_status.setText("ГОТОВО")
+        self.lbl_status.setText(tr_ui("ГОТОВО", "READY", lang=self._lang))
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.mint}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
@@ -772,8 +780,8 @@ class CapriQuickAskBar(QWidget):
         self._generating = False
         self._apply_send_button_style(generating=False)
         self._set_emblem_color(COLORS.crimson)
-        if self.response_panel.isVisible() and self.lbl_status.text() in ("ДУМАЮ…", "ОТВЕТ…"):
-            self.lbl_status.setText("ГОТОВО")
+        if self.response_panel.isVisible() and self.lbl_status.text() in ("ДУМАЮ…", "ОТВЕТ…", "THINKING…", "STREAMING…"):
+            self.lbl_status.setText(tr_ui("ГОТОВО", "READY", lang=self._lang))
             self.lbl_status.setStyleSheet(
                 f"color: {COLORS.mint}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
             )
@@ -782,19 +790,19 @@ class CapriQuickAskBar(QWidget):
         self._generating = False
         self._apply_send_button_style(generating=False)
         self._set_emblem_color(COLORS.crimson)
-        self.lbl_status.setText("ПРЕРВАНО")
+        self.lbl_status.setText(tr_ui("ПРЕРВАНО", "STOPPED", lang=self._lang))
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
         if not self._raw_response_text:
-            self.txt_response.setPlainText("[Генерация остановлена]")
+            self.txt_response.setPlainText(tr_ui("[Генерация остановлена]", "[Generation stopped]", lang=self._lang))
 
     def set_error_text(self, message: str) -> None:
         self._generating = False
         self._apply_send_button_style(generating=False)
         self._set_emblem_color(COLORS.coral)
         self._raw_response_text = message
-        self.lbl_status.setText("ОШИБКА")
+        self.lbl_status.setText(tr_ui("ОШИБКА", "ERROR", lang=self._lang))
         self.lbl_status.setStyleSheet(
             f"color: {COLORS.coral}; font-family: {TYPE.mono}; font-size: 10.5px; font-weight: 700; border: none;"
         )
@@ -842,11 +850,11 @@ class CapriQuickAskBar(QWidget):
         cb = QApplication.clipboard()
         if cb is not None:
             cb.setText(text)
-        self.btn_copy.setText("Скопировано ✓")
+        self.btn_copy.setText(tr_ui("Скопировано ✓", "Copied ✓", lang=self._lang))
         self._copy_reset_timer.start(1400)
 
     def _reset_copy_button_text(self) -> None:
-        self.btn_copy.setText("Копировать")
+        self.btn_copy.setText(tr_ui("Копировать", "Copy", lang=self._lang))
 
     def _on_open_cyberdeck_clicked(self) -> None:
         self.hide()
