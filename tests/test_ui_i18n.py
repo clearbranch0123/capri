@@ -23,7 +23,11 @@ def test_i18n_defaults_to_ru_and_honors_en():
         assert resolve_ui_lang(cfg) == "ru"
         assert tr_ui("Память", "Memory", cfg) == "Память"
         assert format_rounds(1, config=cfg) == "1 раунд"
-        assert format_facts(2, 1, config=cfg) == "2 фактов (+1)"
+        assert format_facts(0, config=cfg) == "0 фактов"
+        assert format_facts(1, config=cfg) == "1 факт"
+        assert format_facts(2, 1, config=cfg) == "2 факта (+1)"
+        assert format_facts(5, config=cfg) == "5 фактов"
+        assert format_facts(11, config=cfg) == "11 фактов"
 
         cfg.ui.language = "en"
         assert resolve_ui_lang(cfg) == "en"
@@ -116,3 +120,39 @@ def test_cyberdeck_lang_button_and_settings_dialogs(tmp_path):
         assert pop.btn_quick_ask.text() == "⚡ Быстрый вопрос"
         pop.close()
 
+
+def test_cold_restart_saved_english_config_without_env_var(tmp_path):
+    """Saved `ui.language: en` in config must apply to Cyberdeck, Quick Ask, and Avatar Popover on cold start."""
+    _ensure_app()
+    from capri.core.memory import MemoryStore
+    from capri.core.sessions import SessionManager
+    from capri.ui.cyberdeck import CapriCyberdeckWindow
+
+    saved_cfg = AppConfig()
+    saved_cfg.ui.language = "en"
+    saved_cfg.voice.wake_word_enabled = False
+    saved_cfg.ui.avatar_enabled = False
+
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("capri.core.config.load_config", return_value=saved_cfg),
+        patch("capri.ui.cyberdeck.load_config", return_value=saved_cfg),
+        patch("capri.ui.dashboard.load_config", return_value=saved_cfg),
+        patch("capri.ui.cyberdeck.notify_avatar", return_value=True),
+        patch("capri.ui.cyberdeck.send_avatar_control", return_value=True),
+    ):
+        os.environ.pop("CAPRI_UI_LANG", None)
+        assert resolve_ui_lang() == "en"
+
+        pop = CapriAvatarQuickPopover(None)
+        assert pop.btn_quick_ask.text() == "⚡ Quick Ask"
+        pop.close()
+
+        deck = CapriCyberdeckWindow(config=None)
+        deck.agent.session_manager = SessionManager(db_path=tmp_path / "cold_s.db")
+        deck.agent.memory_store = MemoryStore(file_path=tmp_path / "cold_m.json")
+        qa = deck._ensure_quick_ask_bar()
+        assert "Ask Capri" in qa.input_edit.placeholderText()
+        assert qa.btn_copy.text() == "Copy"
+        qa.close()
+        deck.close()

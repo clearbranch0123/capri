@@ -1,9 +1,10 @@
-# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.5 — Quick Ask Bar & Memory/Context 2.0)
+# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.6 — Voice 3.0, Focus Companion & Arch Ecosystem)
 
 🇬🇧 **English** · 🇷🇺 **[Русский](README.ru.md)**
 
-[![Version](https://img.shields.io/badge/version-v3.5.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.5.0)
-[![Tests](https://img.shields.io/badge/Tests-268%2F268%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Version](https://img.shields.io/badge/version-v3.6.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.0)
+[![Tests](https://img.shields.io/badge/Tests-289%2F289%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
@@ -11,17 +12,20 @@
 
 > **Unofficial fan project & license notice:** Capri Linux is an independent, non-commercial open-source fan project and is **not affiliated with, endorsed by, or associated with CD PROJEKT RED, Studio Trigger, or Netflix**. The MIT License ([`LICENSE`](LICENSE)) applies **to source code only**; visual and audio assets under `capri/assets/` carry separate non-commercial terms — see [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
-A local-first Linux desktop AI companion built for **Wayland** and **PipeWire**, combining the **Project Capricorn** engram persona (*Soul & Canon*), a compact floating **Quick Ask Bar** (`capri-deck --ask`) that follows you across workspaces, a physics-driven native **`zwlr_layer_shell_v1`** desktop avatar (*Living Physics & Spatial 2.0*), audio-reactive **Voice 2.0**, hybrid **Memory & Context 2.0**, and the unified **Crimson Graphite** UI.
+A local-first Linux desktop AI companion built for **Wayland** and **PipeWire**, combining the **Project Capricorn** engram persona (*Soul & Canon*), low-latency **Voice 3.0**, developer **Watch & Focus Companion** (`capri --watch`, `/pomodoro`), native Arch/CachyOS **`PKGBUILD` & `systemd --user`** integration, a floating **Quick Ask Bar** (`capri-deck --ask`), a physics-driven native **`zwlr_layer_shell_v1`** desktop avatar, hybrid **Memory & Context 2.0**, 1-click **EN / RU** UI switching, and the unified **Crimson Graphite** UI.
 
-Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.json`), emotional state (`emotion.json`), and API keys (`.env`, `0600`) stay local on your machine. When cloud APIs are enabled, only the data needed for the selected feature is sent to your chosen provider (LLM prompt/context + approved memory facts, STT audio snippet, TTS text, or Vision image). Local OpenAI-compatible servers (Ollama / LM Studio) and local STT/TTS engines are supported; optional web search, the isolated browser, and external MCP servers are controlled independently via config and `ToolPolicyEngine`.
+Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.json`), emotional state (`emotion.json`), and API keys (`.env`, `0600`) stay local on your machine. When cloud APIs are enabled, only the data needed for the selected feature is sent to your chosen provider (LLM prompt/context + approved memory facts, STT audio snippet, TTS text, or Vision image). Local OpenAI-compatible servers (Ollama / LM Studio) and local STT/TTS engines are supported; optional web search, the isolated browser, and external MCP servers (with strict allowlisted env isolation) are controlled independently via config and `ToolPolicyEngine`.
 
 ---
 
 ## ✨ Highlights
 
-- **⚡ Quick Ask Bar (`v3.5`):** Floating `640×82` Crimson Graphite prompt bar (`capri-deck --ask`, or `⚡` in Cyberdeck, system tray, and avatar menu). Supports `Ctrl+V` screenshots, `👁` region capture, `🎙` voice input, live answer streaming, `↗ Cyberdeck` handoff, and a sticky **`📌` pin** that follows you across Niri & Hyprland workspaces without stealing focus.
-- **🧠 Memory & Context 2.0 (`v3.5`):** Candidate-gated memory (`pending_memory.json` → explicit approval), secret/credential filtering, BM25 + bilingual RU↔EN recall, token-saving rolling session summaries with secret redaction, cross-session FTS5 recall, and `/recall <query>`.
-- **🧲 Living Physics & Spatial Wayland Avatar (`v3.3–v3.4`):** Native click-through `zwlr_layer_shell_v1` overlay with 60/125 FPS drag & ballistic throws, magnetic perching on window top edges (Niri & Hyprland), multi-monitor output switching with hotplug recovery and cross-screen throws, audio-reactive hologram projection rings, quiet Living Awareness micro-reactions, and drop-in custom sprite slots in `~/.config/capri/sprites/`.
+- **🎙️ Voice 3.0 (`v3.6`):** Eager first-clause splitting, true sliding-window TTS prefetch (`max_prefetch=3`) with instant barge-in cleanup, real 8/16/24/32-bit PCM WAV envelope decoding, and a non-blocking 25 Hz hologram aura dispatcher.
+- **⏱️ Dev & Focus Companion (`v3.6`):** `capri --watch "<cmd>"` wraps long builds/tests with native TTY passthrough, exact exit codes, and voice/avatar completion alerts; `/pomodoro [25|50|15|off]` (and the avatar card) adds a lilac holographic progress ring under Capri's heels with an automatic silence gate.
+- **📦 Arch / CachyOS Ecosystem & Modular Packaging (`v3.6`):** Ready-to-build [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD), opt-in `systemd --user` service (`capri --service install`) with compositor-restart auto-reconnect, modular `pyproject.toml` extras (`[voice]`, `[local-stt]`, `[vision]`, `[web]`, `[all]`), and enhanced `/doctor` hints.
+- **🌐 1-Click EN / RU UI & Hardened Security (`v3.6`):** Instant `RU` / `EN` dock switcher, `/lang`, and strict allowlisted MCP subprocess environments blocking Capri's `.env` keys and credential-bearing proxy URLs from leaking to third-party MCP servers.
+- **⚡ Quick Ask Bar & Memory 2.0 (`v3.5`):** Floating `640×82` Crimson Graphite prompt bar (`capri-deck --ask`) with `Ctrl+V` screenshots, `👁` region capture, `🎙` voice, `📌` workspace pinning (Niri/Hyprland), candidate-gated memory, BM25 + RU↔EN recall, rolling session summaries, and `/recall <query>`.
+- **🧲 Living Physics & Spatial Wayland Avatar (`v3.3–v3.4`):** Native click-through `zwlr_layer_shell_v1` overlay with 60/125 FPS drag & ballistic throws, magnetic window-shelf perching (Niri & Hyprland), multi-monitor hotplug & cross-screen throws, audio-reactive projection rings, and drop-in custom sprites in `~/.config/capri/sprites/`.
 - **🛡️ Fail-Closed Tool Security (`SAFE / ASK / TRUSTED`):** Every shell, filesystem, memory, browser, and external **MCP (stdio JSON-RPC 2.0)** call passes through `ToolPolicyEngine` with interactive approval dialogs, SSRF protection, and redacted `/bugreport` exports.
 
 ---
@@ -60,9 +64,11 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 ### 1. Clean Install
 ```bash
 git clone https://github.com/clearbranch0123/capri.git && cd capri
-./setup.sh
+./setup.sh              # Full install (core + voice, local-stt, vision, web extras)
+# Or lean core-only install:
+./setup.sh --minimal    # Core GUI/CLI/LLM/MCP without heavy voice/STT extras
 ```
-`setup.sh` creates `.venv`, installs the `capri` package (`capri`, `capri-deck`, `capri-avatar`), initializes clean templates in `$XDG_CONFIG_HOME/capri/` (default `~/.config/capri/`, `.env` with `0600` permissions), and installs the `.desktop` launcher.
+`setup.sh` creates `.venv`, installs the `capri` package (`capri`, `capri-deck`, `capri-avatar`), initializes clean templates in `$XDG_CONFIG_HOME/capri/` (default `~/.config/capri/`, `.env` with `0600` permissions), and installs the `.desktop` launcher. For custom `pip` installs, optional dependency groups are available: `pip install .`, `pip install ".[voice]"`, `pip install ".[local-stt]"`, `pip install ".[vision]"`, `pip install ".[web]"`, or `pip install ".[all]"`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full module map, IPC layout, and security boundaries.
 
 ### 2. API Keys & Cloud Data Boundary
 API keys are stored **locally only** in `~/.config/capri/.env` (`0600`) and are never written to `config.yaml`.
@@ -88,7 +94,7 @@ API keys are stored **locally only** in `~/.config/capri/.env` (`0600`) and are 
 ./run.sh --gui         # Cyberdeck GUI
 ./run.sh --doctor      # Environment self-diagnostics
 ./run.sh --bugreport   # Safe redacted bug report (no keys, chats, or memory)
-./run.sh --test        # Full automated test suite (v3.5.0: 265/265 passed, 0 warnings)
+./run.sh --test        # Full automated test suite (0 warnings)
 ./.venv/bin/python scripts/eval_persona.py --mock --providers deepseek,gemini  # Offline persona harness
 ```
 
@@ -134,10 +140,10 @@ Destructive patterns (`rm -rf /`, `mkfs`, `dd of=/dev/...`, `curl | sh`, `shutdo
 ## ⌨️ Core Commands & Controls
 
 - **Shortcuts:** `Enter` (send), `Shift+Enter` (newline), `Ctrl+N` (new chat), `Ctrl+K` (search sessions), `Ctrl+V` (paste screenshot/text), `Ctrl+M` (voice), `Esc` (stop / close drawer), `F2` / `Del` (rename / delete session).
-- **Diagnostics & Backups:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/profile export`, `/profile restore <zip>`.
-- **Memory & Context:** `/new`, `/sessions`, `/recall <query>` *(unified memory + cross-session search)*, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
+- **Diagnostics, Language & Service:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/lang [ru|en]`, `/service [status|install|uninstall]`, `/profile export`, `/profile restore <zip>`, `capri --watch "<cmd>"`.
+- **Memory, Focus & Context:** `/new`, `/sessions`, `/recall <query>` *(unified memory + cross-session search)*, `/pomodoro [25|50|15|off]` *(Focus timer + silence gate)*, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
 - **Integrations:** `/mcp [status|connect|disconnect|tools]`, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
-- **Desktop Avatar & Quick Ask (`v3.5`):** **LMB** — drag & ballistic throw (lands on window shelves & crosses adjacent monitor seams); **Shift + LMB release** — pin in mid-air; **RMB** — **Crimson Graphite** quick-control card (`⚡ Quick Ask`, poses, physics, autonomous life, monitor switcher `DP-1 / HDMI-A-1`, `🎙 Voice`, `👁 Region`, `◈ Relic`, quit avatar); floating **Quick Ask Bar** with **`📌`** follows you across Niri/Hyprland workspaces without stealing focus; drop custom sprites (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, optional `poses.json`) into `~/.config/capri/sprites/`.
+- **Desktop Avatar & Quick Ask (`v3.5–v3.6`):** **LMB** — drag & ballistic throw (lands on window shelves & crosses adjacent monitor seams); **Shift + LMB release** — pin in mid-air; **RMB** — **Crimson Graphite** quick-control card (`⚡ Quick Ask`, `⏱ Focus`, poses, physics, autonomous life, monitor switcher `DP-1 / HDMI-A-1`, `🎙 Voice`, `👁 Region`, `◈ Relic`, quit avatar); floating **Quick Ask Bar** with **`📌`** follows you across Niri/Hyprland workspaces without stealing focus; drop custom sprites (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, optional `poses.json`) into `~/.config/capri/sprites/`.
 
 ---
 

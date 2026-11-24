@@ -24,7 +24,13 @@ except Exception as _sd_exc:  # PortAudio/PulseAudio may be unavailable on headl
     _SOUNDDEVICE_IMPORT_ERROR: Optional[Exception] = _sd_exc
 else:
     _SOUNDDEVICE_IMPORT_ERROR = None
-import vosk
+try:
+    import vosk
+except Exception as _vosk_exc:  # Optional offline wake-word dependency
+    vosk = None  # type: ignore[assignment]
+    _VOSK_IMPORT_ERROR: Optional[Exception] = _vosk_exc
+else:
+    _VOSK_IMPORT_ERROR = None
 
 from ..ui.client import notify_avatar
 
@@ -205,7 +211,9 @@ class WakeWordListener:
         self._cancel_wake_event.set()
 
     def is_available(self) -> bool:
-        """Проверяет доступность модели Vosk или возможность её автозагрузки."""
+        """Проверяет доступность пакета и оффлайн-модели Vosk."""
+        if vosk is None:
+            return False
         return ensure_vosk_model(self.model_path)
 
     def pause(self):
@@ -219,6 +227,9 @@ class WakeWordListener:
         self._paused = False
 
     def start(self) -> bool:
+        if vosk is None:
+            logger.warning(f"Wake-Word отключён: пакет `vosk` не установлен ({_VOSK_IMPORT_ERROR})")
+            return False
         if not self.is_available():
             logger.warning(f"Vosk model not available at {self.model_path}")
             return False

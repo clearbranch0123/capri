@@ -1,9 +1,9 @@
 """
 CAPRI // Cyberpunk AI Companion for Linux (Niri Wayland / Hyprland / Arch / CachyOS / Fedora)
-Construct Relic Engram — QUICK ASK BAR & MEMORY/CONTEXT 2.0 (v3.5.0)
+Construct Relic Engram — VOICE 3.0, FOCUS & ARCH ECOSYSTEM (v3.6.0)
 """
 
-__version__ = "3.5.0"
+__version__ = "3.6.0"
 __app_name__ = "Capri"
 __codename__ = "Project Capricorn // Relic Engram"
 __author__ = "D"

@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import select
 import threading
 import time
 from typing import Callable, Optional
-import evdev
-from evdev import ecodes
+try:
+    import evdev
+    from evdev import ecodes
+except Exception as _evdev_exc:  # Optional global PTT hotkey dependency
+    evdev = None  # type: ignore[assignment]
+    ecodes = None  # type: ignore[assignment]
+    _EVDEV_IMPORT_ERROR: Optional[Exception] = _evdev_exc
+else:
+    _EVDEV_IMPORT_ERROR = None
 from ..ui.client import notify_avatar
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PTT_KEY = "KEY_RIGHTALT"
 
@@ -24,7 +34,7 @@ class PushToTalkListener:
         wake_listener=None,
     ):
         self.key_name = self._normalize_key_name(key_name)
-        self.key_code = getattr(ecodes, self.key_name, ecodes.KEY_RIGHTALT)
+        self.key_code = getattr(ecodes, self.key_name, ecodes.KEY_RIGHTALT) if ecodes is not None else None
         self.on_speech_ready = on_speech_ready
         self.on_press = on_press
         self.stt = stt_instance
@@ -33,7 +43,7 @@ class PushToTalkListener:
 
         self.running = False
         self.thread: Optional[threading.Thread] = None
-        self.devices: list[evdev.InputDevice] = []
+        self.devices: list = []
         self.is_key_pressed = False
 
     def _normalize_key_name(self, name: str) -> str:
@@ -49,7 +59,9 @@ class PushToTalkListener:
         }
         return aliases.get(s, s)
 
-    def _find_devices(self) -> list[evdev.InputDevice]:
+    def _find_devices(self) -> list:
+        if evdev is None or ecodes is None or self.key_code is None:
+            return []
         devs = []
         for path in evdev.list_devices():
             try:
@@ -64,6 +76,9 @@ class PushToTalkListener:
         return devs
 
     def start(self) -> bool:
+        if evdev is None or ecodes is None:
+            logger.warning(f"Push-to-Talk отключён: пакет `evdev` не установлен ({_EVDEV_IMPORT_ERROR})")
+            return False
         self.devices = self._find_devices()
         if not self.devices:
             return False

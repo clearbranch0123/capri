@@ -3917,6 +3917,7 @@ class CapriCyberdeckWindow(QWidget):
         self.barge_in_monitor = None
         self.avatar_proc: Optional[subprocess.Popen] = None
         self._force_quit: bool = False
+        self._focus_gate_until: float = 0.0
         self.tray_icon: Optional[QSystemTrayIcon] = None
         self.ipc_server: Optional[QLocalServer] = None
         self._ipc_socket_path: Optional[str] = None
@@ -5013,6 +5014,7 @@ class CapriCyberdeckWindow(QWidget):
         cmds = [
             ("/status", tr_ui("Статус системы (CPU / GPU / RAM)", "System status (CPU / GPU / RAM)", lang=lang)),
             ("/ask", tr_ui("Открыть плавающий Quick Ask Bar", "Open floating Quick Ask Bar", lang=lang)),
+            ("/pomodoro 25", tr_ui("Запустить Фокус-таймер 25м (Pomodoro)", "Start 25m Focus Timer (Pomodoro)", lang=lang)),
             ("/look", tr_ui("Посмотреть на экран (Vision AI)", "Inspect screen (Vision AI)", lang=lang)),
             ("/recall", tr_ui("Поиск по памяти и прошлым сессиям (/recall <запрос>)", "Search memory & past chats (/recall <query>)", lang=lang)),
             (f"/lang {next_lang}", tr_ui("Переключить язык интерфейса на English", "Switch UI language to Русский", lang=lang)),
@@ -5881,11 +5883,18 @@ class CapriCyberdeckWindow(QWidget):
             active = False
         self._game_mode_active = active
 
+        focus_rem = max(0.0, getattr(self, "_focus_gate_until", 0.0) - time.monotonic())
         if hasattr(self, "lbl_status_chip") and self.lbl_status_chip:
             if active:
                 self.lbl_status_chip.setText("● Game Mode")
                 self.lbl_status_chip.setStyleSheet(
                     f"color: {COLORS.amber}; font-family: {TYPE.mono}; font-size: 11px; font-weight: 600;"
+                )
+            elif focus_rem > 0.5:
+                mins_left = max(1, int((focus_rem + 59.0) // 60))
+                self.lbl_status_chip.setText(f"● Focus {mins_left}m")
+                self.lbl_status_chip.setStyleSheet(
+                    f"color: {COLORS.lilac}; font-family: {TYPE.mono}; font-size: 11px; font-weight: 600; padding: 0px 4px;"
                 )
             else:
                 self.lbl_status_chip.setText("● Online")
@@ -5898,6 +5907,8 @@ class CapriCyberdeckWindow(QWidget):
         if not hasattr(self, "agent") or not self.agent:
             return
         gm_active = self._sync_game_mode_state()
+        if time.monotonic() < getattr(self, "_focus_gate_until", 0.0):
+            return
         if not getattr(self.config.companion, "proactive_enabled", True):
             return
         if self._is_generating() or self._is_recording_voice():
@@ -6019,7 +6030,7 @@ class CapriCyberdeckWindow(QWidget):
             if is_narrow
             else tr_ui("Написать Капри...   / для команд", "Message Capri...   / for commands", cfg)
         )
-        qa = getattr(self, "_quick_ask", None)
+        qa = getattr(self, "_quick_ask_bar", None)
         if qa is not None and hasattr(qa, "set_language"):
             qa.set_language(lang)
         relic = getattr(self, "_relic_dashboard", None)
@@ -6701,6 +6712,7 @@ class CapriCyberdeckWindow(QWidget):
                 help_text = (
                     "**CAPRI CYBERDECK COMMANDS:**\n\n"
                     "- `/ask` — open floating Quick Ask Bar (`capri-deck --ask`)\n"
+                    "- `/pomodoro [25|50|15|off]` — start/stop Focus Timer with aura & silence gate\n"
                     "- `/lang [ru|en]` — switch UI language (`RU` pill in sidebar or Settings)\n"
                     "- `/doctor` — environment, config, SQLite, and PipeWire self-diagnostics\n"
                     "- `/bugreport [path.md]` — safe redacted bug report (no keys or chats)\n"
@@ -6717,6 +6729,7 @@ class CapriCyberdeckWindow(QWidget):
                     "- `/browser [url|search|link|status|clear]` — isolated browser\n"
                     "- `/call [join|leave|status]` — PipeWire virtual microphone (Join Voice)\n"
                     "- `/wm-rules [niri|hyprland] [apply] [--no-hotkey]` — compositor rules & hotkeys\n"
+                    "- `/service [status|install|uninstall]` — optional `systemd --user` avatar service\n"
                     "- `/gamemode [auto|on|off]` — quiet power-saver mode during fullscreen games\n"
                     "- `/avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle]` — desktop avatar\n"
                     "- `/come`, `/stay`, `/follow [on|off]`, `/home` — avatar Spatial Presence\n"
@@ -6729,6 +6742,7 @@ class CapriCyberdeckWindow(QWidget):
                 help_text = (
                     "**ДОСТУПНЫЕ КОМАНДЫ КИБЕРДЕКА:**\n\n"
                     "- `/ask` — открыть плавающую мини-строку Quick Ask Bar (`capri-deck --ask`)\n"
+                    "- `/pomodoro [25|50|15|off]` — запустить/остановить Фокус-таймер с аурой и авто-тишиной\n"
                     "- `/lang [ru|en]` — сменить язык интерфейса (или кнопка `RU/EN` внизу панели и в Настройках)\n"
                     "- `/doctor` — самодиагностика системы, конфига, SQLite и аудио\n"
                     "- `/bugreport [путь.md]` — безопасный баг-репорт (без ключей и переписки)\n"
@@ -6745,6 +6759,7 @@ class CapriCyberdeckWindow(QWidget):
                     "- `/browser [url|search|link|status|clear]` — изолированный браузер\n"
                     "- `/call [join|leave|status]` — виртуальный микрофон PipeWire (Join Voice)\n"
                     "- `/wm-rules [niri|hyprland] [apply] [--no-hotkey]` — правила окон и хоткеи\n"
+                    "- `/service [status|install|uninstall]` — опциональный `systemd --user` сервис аватара\n"
                     "- `/gamemode [auto|on|off]` — тихий режим во время полноэкранных игр\n"
                     "- `/focus [окно]` / `/windows` — управление окнами Niri\n"
                     "- `/avatar [dance|glitch|playful|perch|music|sleep|wake|idle|toggle]` — управление аватаром\n"
@@ -6755,6 +6770,70 @@ class CapriCyberdeckWindow(QWidget):
                     "- `/tools`, `/reset`, `/clear`, `/privacy`, `/changelog`, `/exit`"
                 )
             self._append_message(tr_ui("Система", "System", self.config), help_text)
+            return
+
+        if cmd in ("/pomodoro", "/focus-timer", "/focustimer"):
+            arg = parts[1].strip().lower() if len(parts) > 1 else "25"
+            lang = resolve_ui_lang(self.config)
+            if arg in ("off", "stop", "0", "cancel"):
+                self._focus_gate_until = 0.0
+                self._sync_game_mode_state()
+                self._dispatch_avatar_control_with_retry({"type": "focus_timer", "action": "stop"})
+                self._append_message(
+                    tr_ui("Система", "System", lang=lang),
+                    tr_ui("⏱ Фокус-таймер остановлен.", "⏱ Focus Timer stopped.", lang=lang),
+                )
+                return
+            try:
+                mins = float(arg.rstrip("mм"))
+            except ValueError:
+                mins = 25.0
+            mins = max(1.0, min(240.0, mins))
+            self._focus_gate_until = time.monotonic() + mins * 60.0
+            self._sync_game_mode_state()
+            self._ensure_avatar_running()
+            # Avatar may still be booting (no IPC socket yet) — retry until the socket accepts the command
+            self._dispatch_avatar_control_with_retry({"type": "focus_timer", "action": "start", "minutes": mins})
+            mins_int = int(round(mins))
+            self._append_message(
+                tr_ui("Система", "System", lang=lang),
+                tr_ui(
+                    f"⏱ Фокус-таймер запущен на **{mins_int} мин** (режим тишины и аура фокуса активны).",
+                    f"⏱ Focus Timer started for **{mins_int} min** (silence gate & focus aura active).",
+                    lang=lang,
+                ),
+            )
+            return
+
+        if cmd in ("/service", "/systemd"):
+            from ..core.systemd_service import (
+                get_avatar_service_status,
+                install_avatar_service,
+                uninstall_avatar_service,
+            )
+
+            sub = parts[1].strip().lower() if len(parts) > 1 else "status"
+            lang = resolve_ui_lang(self.config)
+            sender = tr_ui("Система", "System", lang=lang)
+            if sub in ("install", "enable", "apply"):
+                res = install_avatar_service(
+                    enable="--no-enable" not in parts,
+                    start="--start" in parts or "--now" in parts,
+                    dry_run="--dry-run" in parts,
+                )
+                body = res.message
+                if res.wayland_env_warning:
+                    body += f"\n⚠ {res.wayland_env_warning}"
+                self._append_message(sender, body)
+            elif sub in ("uninstall", "remove", "disable"):
+                res = uninstall_avatar_service()
+                self._append_message(sender, res.message)
+            else:
+                st = get_avatar_service_status()
+                body = st.detail
+                if st.installed and st.wayland_in_systemd_env is False:
+                    body += "\n⚠ `WAYLAND_DISPLAY` not in systemd --user env: `systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP`"
+                self._append_message(sender, body)
             return
 
         if cmd in ("/lang", "/language"):
@@ -8047,6 +8126,7 @@ class CapriCyberdeckWindow(QWidget):
         if qa is None:
             from .quick_ask import CapriQuickAskBar
             qa = CapriQuickAskBar(None)
+            qa.set_language(resolve_ui_lang(getattr(self, "config", None)))
             qa.submit_requested.connect(self._on_quick_ask_submit)
             qa.stop_requested.connect(lambda: self._stop_generation(silent=False))
             qa.voice_toggle_requested.connect(self._toggle_voice_input)
@@ -8260,13 +8340,44 @@ class CapriCyberdeckWindow(QWidget):
             self.visualizer.set_state("idle")
             notify_avatar("idle")
 
+    _AVATAR_CONTROL_RETRY_MS: int = 250
+    _AVATAR_CONTROL_MAX_RETRIES: int = 24  # ~6s window for a cold-starting avatar to create its IPC socket
+
+    def _dispatch_avatar_control_with_retry(self, payload: dict) -> bool:
+        """
+        Send `payload` to the desktop avatar. If its IPC socket isn't up yet (avatar still launching),
+        keep retrying on a non-blocking Qt timer until it accepts. A newer dispatch supersedes any pending
+        retry (e.g. `/pomodoro off` right after `/pomodoro 25`) so stale commands never fire late.
+        """
+        self._avatar_ctl_token = getattr(self, "_avatar_ctl_token", 0) + 1
+        token = self._avatar_ctl_token
+        if send_avatar_control(payload):
+            return True
+
+        attempts = {"n": 0}
+
+        def _retry() -> None:
+            if token != getattr(self, "_avatar_ctl_token", token):
+                return  # superseded by a newer command
+            attempts["n"] += 1
+            if send_avatar_control(payload):
+                return
+            if attempts["n"] < self._AVATAR_CONTROL_MAX_RETRIES:
+                QTimer.singleShot(self._AVATAR_CONTROL_RETRY_MS, _retry)
+
+        QTimer.singleShot(self._AVATAR_CONTROL_RETRY_MS, _retry)
+        return False
+
     def _ensure_avatar_running(self):
+        ui_lang = resolve_ui_lang(self.config)
         if notify_avatar("idle"):
+            send_avatar_control({"type": "config_sync", "ui_language": ui_lang})
             return
 
         proj_root = Path(__file__).resolve().parent.parent.parent
         env = dict(os.environ)
         env["PYTHONPATH"] = str(proj_root)
+        env["CAPRI_UI_LANG"] = ui_lang
         try:
             mode = getattr(self.config.ui, "avatar_mode", "2d")
             self.avatar_proc = subprocess.Popen(
@@ -8427,6 +8538,15 @@ class CapriCyberdeckWindow(QWidget):
                 self._trigger_look_region()
             elif cmd == "ask":
                 self._toggle_quick_ask()
+            elif cmd == "focus_gate":
+                sec = 0.0
+                if raw.startswith("{"):
+                    try:
+                        sec = float(json.loads(raw).get("seconds", 0.0) or 0.0)
+                    except Exception:
+                        sec = 0.0
+                self._focus_gate_until = (time.monotonic() + sec) if sec > 0.0 else 0.0
+                self._sync_game_mode_state()
             elif cmd == "quit":
                 QTimer.singleShot(0, self._quit_application)
             try:

@@ -16,14 +16,22 @@ _EN_CATEGORIES = {
 
 
 def resolve_ui_lang(config: Any = None) -> str:
-    """Return `'en'` or `'ru'` (defaults strictly to `'ru'` unless configured)."""
+    """Return `'en'` or `'ru'` (honors `CAPRI_UI_LANG`, passed `config`, or saved `load_config()`)."""
     env_lang = (os.environ.get("CAPRI_UI_LANG") or "").strip().lower()
     if env_lang.startswith("en"):
         return "en"
     if env_lang.startswith("ru"):
         return "ru"
-    if config is not None:
-        ui_obj = getattr(config, "ui", config)
+    cfg_obj = config
+    if cfg_obj is None:
+        try:
+            from ..core.config import load_config
+
+            cfg_obj = load_config()
+        except Exception:
+            cfg_obj = None
+    if cfg_obj is not None:
+        ui_obj = getattr(cfg_obj, "ui", cfg_obj)
         cfg_lang = str(getattr(ui_obj, "language", "") or "").strip().lower()
         if cfg_lang.startswith("en"):
             return "en"
@@ -52,11 +60,22 @@ def format_rounds(count: int, *, lang: Optional[str] = None, config: Any = None)
     return f"{n} раундов"
 
 
+def _ru_facts_noun(count: int) -> str:
+    n = abs(int(count))
+    if n % 10 == 1 and n % 100 != 11:
+        return "факт"
+    if 2 <= (n % 10) <= 4 and not (12 <= (n % 100) <= 14):
+        return "факта"
+    return "фактов"
+
+
 def format_facts(saved_cnt: int, pend_cnt: int = 0, *, lang: Optional[str] = None, config: Any = None) -> str:
+    n = int(saved_cnt)
     if is_english_ui(config, lang=lang):
-        word = "fact" if saved_cnt == 1 else "facts"
-        return f"{saved_cnt} {word} (+{pend_cnt})" if pend_cnt else f"{saved_cnt} {word}"
-    return f"{saved_cnt} фактов (+{pend_cnt})" if pend_cnt else f"{saved_cnt} фактов"
+        word = "fact" if abs(n) == 1 else "facts"
+        return f"{n} {word} (+{pend_cnt})" if pend_cnt else f"{n} {word}"
+    noun = _ru_facts_noun(n)
+    return f"{n} {noun} (+{pend_cnt})" if pend_cnt else f"{n} {noun}"
 
 
 def format_active_tools(cnt: int, *, lang: Optional[str] = None, config: Any = None) -> str:

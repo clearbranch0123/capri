@@ -53,6 +53,7 @@ from ..core.compositor import (
     map_y_between_monitors,
 )
 from ..core.config import load_config
+from ..core.focus_timer import FocusTimerController
 from ..core.presence import (
     GameModeState,
     MediaPlaybackState,
@@ -287,11 +288,20 @@ class CapriAvatarWidget(QWidget):
         "Предупреждать надо, прежде чем пол убирать!",
     )
 
-    def __init__(self, mode: str = "2d", parent_pid: int | None = None, size: int = 300):
+    def __init__(
+        self,
+        mode: str = "2d",
+        parent_pid: int | None = None,
+        size: int = 300,
+        *,
+        systemd_managed: bool = False,
+    ):
         super().__init__()
         self.mode = mode  # "2d" (v2 sprite), "classic" (circle), "3d"
         self.parent_pid = parent_pid
         self.avatar_size = size
+        self.systemd_managed: bool = bool(systemd_managed)
+        self._compositor_reconnect_exit: bool = False
         self.state = AvatarState.IDLE
         self.pulse_phase = 0.0
         self.rotation_angle = 0.0
@@ -307,6 +317,7 @@ class CapriAvatarWidget(QWidget):
             self.reduced_motion: bool = bool(getattr(cfg.ui, "reduced_motion", False))
             self.physics_enabled: bool = bool(getattr(cfg.ui, "avatar_physics_enabled", True))
             self.autonomous_life_enabled: bool = bool(getattr(cfg.ui, "avatar_autonomous_life", True))
+            self.ui_language: str = "en" if str(getattr(cfg.ui, "language", "ru") or "ru").strip().lower().startswith("en") else "ru"
         except Exception:
             self.auto_poses_enabled = True
             self.game_mode_enabled = True
@@ -314,6 +325,7 @@ class CapriAvatarWidget(QWidget):
             self.reduced_motion = False
             self.physics_enabled = True
             self.autonomous_life_enabled = True
+            self.ui_language = "ru"
 
         self.physics = AvatarPhysics2D(
             avatar_w=300.0,
@@ -331,6 +343,7 @@ class CapriAvatarWidget(QWidget):
             _aw_mode = "normal"
         self.companion_mode: str = _aw_mode
         self.awareness = AvatarAwarenessEngine(user_name=_aw_user, now=time.time())
+        self.focus_timer = FocusTimerController()
         self._auto_walk_target: Optional[tuple[float, float]] = None
         self._auto_walk_surface: Optional[LandingSurface] = None
         self._auto_walk_ipc_accum: float = 0.0
@@ -534,6 +547,15 @@ class CapriAvatarWidget(QWidget):
     def _on_layer_closed(self) -> None:
         self.using_layer_stage = False
         self.layer_stage = None
+        if self.systemd_managed:
+            # Compositor restarted or closed the Wayland display: exit non-zero so `systemd --user`
+            # (`Restart=on-failure`) cleanly reconnects once the new compositor socket comes up.
+            self._compositor_reconnect_exit = True
+            self.close()
+            app_inst = QApplication.instance()
+            if app_inst is not None:
+                app_inst.exit(1)
+            return
         if not self.isVisible():
             self.show()
 
@@ -971,10 +993,23 @@ class CapriAvatarWidget(QWidget):
                         self.awareness.user_name = str(data["user_name"]).strip()
                     if "ui_language" in data:
                         ui_lang = "en" if str(data.get("ui_language") or "").strip().lower().startswith("en") else "ru"
+                        self.ui_language = ui_lang
                         os.environ["CAPRI_UI_LANG"] = ui_lang
-                        if getattr(self, "_popover", None) is not None:
-                            self._popover.set_language(ui_lang)
+                        if getattr(self, "quick_popover", None) is not None:
+                            self.quick_popover.set_language(ui_lang)
                     self._sync_auto_pose()
+                    continue
+                if data.get("type") == "focus_timer":
+                    act = str(data.get("action") or "cycle").strip().lower()
+                    if act == "stop":
+                        self._stop_focus_timer()
+                    elif act == "start":
+                        if "seconds" in data and data["seconds"] is not None:
+                            self._start_focus_timer_seconds(float(data["seconds"]))
+                        else:
+                            self._start_focus_timer(float(data.get("minutes", 25.0)))
+                    else:
+                        self._cycle_focus_timer()
                     continue
                 new_state = data.get("state", self.state)
                 text = data.get("text", "")
@@ -1024,6 +1059,11 @@ class CapriAvatarWidget(QWidget):
         self.brain_timer.timeout.connect(self._tick_autonomous_brain)
         if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.brain_timer.start()
+
+        # Таймер отсчёта Focus / Pomodoro (1 Гц, работает только пока активна сессия фокуса)
+        self.focus_tick_timer = QTimer(self)
+        self.focus_tick_timer.setInterval(1000)
+        self.focus_tick_timer.timeout.connect(self._on_focus_timer_tick)
 
         # Сторожевой таймер: проверка жизни родительского процесса
         if self.parent_pid:
@@ -1723,6 +1763,7 @@ class CapriAvatarWidget(QWidget):
         p.autonomous_toggled.connect(self._toggle_autonomous_life)
         p.follow_toggled.connect(self._toggle_follow_mode)
         p.auto_poses_toggled.connect(self._toggle_auto_poses)
+        p.focus_timer_cycled.connect(self._cycle_focus_timer)
         p.game_mode_cycled.connect(self._cycle_game_mode)
         p.monitor_cycle_requested.connect(self._cycle_avatar_monitor)
         p.home_requested.connect(self._return_home_from_ui)
@@ -1732,6 +1773,7 @@ class CapriAvatarWidget(QWidget):
     def _sync_quick_popover(self) -> None:
         if not hasattr(self, "quick_popover") or self.quick_popover is None:
             return
+        focus_snap = self.focus_timer.snapshot()
         self.quick_popover.sync_from_state(
             active_pose=self.canvas_v2.pose if hasattr(self, "canvas_v2") else "normal",
             dance_active=bool(self.canvas_v2.dance_active) if hasattr(self, "canvas_v2") else False,
@@ -1747,6 +1789,8 @@ class CapriAvatarWidget(QWidget):
             avatar_state=self.state,
             available_monitors=self.layer_stage.available_outputs() if self.layer_stage is not None else [m.name for m in self._known_monitors],
             active_monitor=self.layer_stage.active_output_name if self.layer_stage is not None else "",
+            focus_timer_label=focus_snap.mm_ss,
+            focus_timer_active=focus_snap.active,
         )
 
     def _open_relic_dashboard(self) -> None:
@@ -1839,6 +1883,76 @@ class CapriAvatarWidget(QWidget):
         self.manual_pose_override = None
         self._sync_auto_pose()
         self._sync_quick_popover()
+
+    def _apply_focus_snapshot_visuals(self, snap, *, notify_deck: bool = True) -> None:
+        if snap.active:
+            self._cancel_autonomous_walk()
+            if not self.focus_tick_timer.isActive():
+                self.focus_tick_timer.start()
+        else:
+            if self.focus_tick_timer.isActive():
+                self.focus_tick_timer.stop()
+        if hasattr(self, "canvas_v2"):
+            self.canvas_v2.set_focus_visual(snap.active, snap.progress)
+            self.canvas_v2.update()
+        self._sync_quick_popover()
+        if self.using_layer_stage:
+            self._render_layer_frame()
+        if notify_deck:
+            try:
+                from .client import send_cyberdeck_command
+
+                send_cyberdeck_command(
+                    "focus_gate",
+                    extra={"seconds": round(snap.remaining_seconds, 1) if snap.active else 0.0},
+                )
+            except Exception:
+                pass
+
+    def _start_focus_timer(self, minutes: float = 25.0) -> None:
+        snap = self.focus_timer.start(minutes)
+        self._apply_focus_snapshot_visuals(snap)
+        is_en = getattr(self, "ui_language", "ru") == "en"
+        mins_lbl = f"{snap.preset_minutes}m" if is_en else f"{snap.preset_minutes}м"
+        msg = f"⏱ Focus {mins_lbl} — quiet mode engaged." if is_en else f"⏱ Фокус {mins_lbl} — режим тишины включён."
+        self._show_ephemeral_caption(msg, ticks=165)
+
+    def _start_focus_timer_seconds(self, seconds: float) -> None:
+        snap = self.focus_timer.start_seconds(seconds)
+        self._apply_focus_snapshot_visuals(snap)
+
+    def _stop_focus_timer(self) -> None:
+        snap = self.focus_timer.stop()
+        self._apply_focus_snapshot_visuals(snap)
+
+    def _cycle_focus_timer(self) -> None:
+        snap = self.focus_timer.cycle_preset()
+        self._apply_focus_snapshot_visuals(snap)
+        if snap.active and not self.power_saver_active:
+            is_en = getattr(self, "ui_language", "ru") == "en"
+            mins_lbl = f"{snap.preset_minutes}m" if is_en else f"{snap.preset_minutes}м"
+            msg = f"⏱ Focus {mins_lbl} — quiet mode engaged." if is_en else f"⏱ Фокус {mins_lbl} — режим тишины включён."
+            self._show_ephemeral_caption(msg, ticks=155)
+
+    def _on_focus_timer_tick(self) -> None:
+        finished = self.focus_timer.tick()
+        snap = self.focus_timer.snapshot()
+        if finished:
+            self._apply_focus_snapshot_visuals(snap, notify_deck=True)
+            from ..core.resources import get_asset_path
+            from .locomotion import play_sound
+
+            play_sound(get_asset_path("wake_chirp.wav"))
+            is_en = getattr(self, "ui_language", "ru") == "en"
+            u_name = getattr(self.awareness, "user_name", "User") or "User"
+            done_msg = (
+                f"⏱ Focus session complete! Time to stretch, {u_name}."
+                if is_en
+                else f"⏱ Фокус-сессия завершена! Время размяться, {u_name}."
+            )
+            self._show_ephemeral_caption(done_msg, ticks=260)
+            return
+        self._apply_focus_snapshot_visuals(snap, notify_deck=False)
 
     def _cycle_game_mode(self) -> None:
         if self.game_mode_override is None:
@@ -1969,12 +2083,14 @@ class CapriAvatarWidget(QWidget):
                     compositor.move_floating_window_exact_sync(wid, int(round(new_x)), int(round(ty)))
 
     def _tick_autonomous_brain(self) -> None:
+        focus_quiet = self.focus_timer.is_silent_gate_active
+        effective_mode = "focus" if focus_quiet else self.companion_mode
         # 0. Calm Living Awareness micro-reactions (strictly rate-limited, silent in Game/Focus/Quiet)
         cue = self.awareness.tick(
             now=time.time(),
             reactions_enabled=self.reactions_enabled,
             game_mode_active=self.power_saver_active,
-            companion_mode=self.companion_mode,
+            companion_mode=effective_mode,
             avatar_state=self.state,
             physics_state=self.physics.state,
             has_active_caption=bool((self.caption_text or "").strip()),
@@ -1984,6 +2100,7 @@ class CapriAvatarWidget(QWidget):
 
         if (
             not self.autonomous_life_enabled
+            or focus_quiet
             or self.power_saver_active
             or self.reduced_motion
             or self._auto_walk_target is not None
@@ -2055,6 +2172,8 @@ class CapriAvatarWidget(QWidget):
             self._drag_timer.stop()
         if hasattr(self, "_click_timer") and self._click_timer:
             self._click_timer.stop()
+        if hasattr(self, "focus_tick_timer") and self.focus_tick_timer:
+            self.focus_tick_timer.stop()
         if hasattr(self, "brain_timer") and self.brain_timer:
             self.brain_timer.stop()
         if hasattr(self, "quick_popover") and self.quick_popover:
@@ -2080,13 +2199,76 @@ class CapriAvatarWidget(QWidget):
         event.accept()
 
 
+def _is_wayland_socket_connectable(sock_path: Path) -> bool:
+    """Return True if `sock_path` is a live listening Unix socket (rejects stale crash leftovers)."""
+    import socket
+    import stat
+
+    try:
+        st = sock_path.stat()
+    except OSError:
+        return False
+    if not stat.S_ISSOCK(st.st_mode):
+        return False
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(0.2)
+        s.connect(str(sock_path))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def wait_for_wayland_socket(
+    timeout_s: float = 15.0,
+    poll_interval: float = 0.25,
+    *,
+    runtime_dir: Optional[Path] = None,
+) -> Optional[str]:
+    """
+    Wait for a live, connectable Wayland compositor socket under `$XDG_RUNTIME_DIR` (used by `--systemd`
+    so `capri-avatar.service` reconnects cleanly after a Niri/Hyprland login or restart).
+    Returns the discovered `WAYLAND_DISPLAY` name or None if timed out.
+    """
+    rdir = Path(runtime_dir) if runtime_dir is not None else Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    while True:
+        preferred = (os.environ.get("WAYLAND_DISPLAY") or "").strip()
+        if preferred:
+            cand = Path(preferred) if os.path.isabs(preferred) else (rdir / preferred)
+            if _is_wayland_socket_connectable(cand):
+                return preferred
+        if rdir.is_dir():
+            for sock in sorted(rdir.glob("wayland-*")):
+                if sock.name.endswith(".lock"):
+                    continue
+                if _is_wayland_socket_connectable(sock):
+                    os.environ["WAYLAND_DISPLAY"] = sock.name
+                    return sock.name
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(max(0.01, float(poll_interval)))
+
+
 def launch_avatar():
     from .. import __version__
     parser = argparse.ArgumentParser(prog="capri-avatar", description="Capri Desktop Avatar Overlay")
     parser.add_argument("--version", "-v", action="version", version=f"Capri Avatar Overlay v{__version__}")
     parser.add_argument("--mode", default="2d", choices=["2d", "3d"])
     parser.add_argument("--parent-pid", type=int, default=None)
+    parser.add_argument("--systemd", action="store_true", help="Run under systemd --user with compositor-restart auto-reconnect")
+    parser.add_argument("--wait-wayland", type=float, default=None, help="Seconds to wait for Wayland socket before starting")
     args, _ = parser.parse_known_args()
+
+    wait_sec = args.wait_wayland if args.wait_wayland is not None else (15.0 if args.systemd else 0.0)
+    if wait_sec > 0.0 and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        if wait_for_wayland_socket(timeout_s=wait_sec) is None:
+            sys.exit(1)
 
     # 1. Защита от дублей: если уже запущен активный PID, проверяем его жизнь
     if os.path.exists(PID_PATH):
@@ -2143,11 +2325,13 @@ def launch_avatar():
     app = QApplication(sys.argv)
     from .theme import apply_dark_palette
     apply_dark_palette(app)
-    widget = CapriAvatarWidget(mode=args.mode, parent_pid=args.parent_pid)
+    widget = CapriAvatarWidget(mode=args.mode, parent_pid=args.parent_pid, systemd_managed=bool(args.systemd))
     if not widget.using_layer_stage:
         widget.show()
 
     ret = app.exec()
+    if getattr(widget, "_compositor_reconnect_exit", False) and ret == 0:
+        ret = 1
     if os.path.exists(PID_PATH):
         try:
             os.unlink(PID_PATH)

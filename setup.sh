@@ -8,13 +8,15 @@ cd "$SCRIPT_DIR"
 MODE="install"
 PURGE_DATA=0
 OFFLINE_MODE=0
+MINIMAL_MODE=0
 
 usage() {
     cat <<'EOF'
 Capri AI Companion — Setup, Upgrade & Uninstall (Open Beta)
 
 Usage:
-  ./setup.sh                  Install or refresh Capri (.venv, config templates, .desktop)
+  ./setup.sh                  Install or refresh Capri with full extras (`.venv`, templates, `.desktop`)
+  ./setup.sh --minimal        Install lean core package only (without optional voice/local-stt extras)
   ./setup.sh --upgrade        Safely upgrade Capri in-place with pre-upgrade profile backup
   ./setup.sh --uninstall      Remove .venv and desktop launcher (preserves user data/keys)
   ./setup.sh --uninstall --purge
@@ -33,6 +35,9 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --upgrade|-u)
             MODE="upgrade"
+            ;;
+        --minimal)
+            MINIMAL_MODE=1
             ;;
         --uninstall)
             MODE="uninstall"
@@ -145,11 +150,15 @@ install_pkg() {
         fi
         return 0
     fi
+    local EXTRAS=".[all,test]"
+    if [ "$MINIMAL_MODE" -eq 1 ]; then
+        EXTRAS=".[test]"
+    fi
     if command -v uv >/dev/null 2>&1; then
-        uv pip install --python .venv/bin/python -e ".[test]"
+        uv pip install --python .venv/bin/python -e "$EXTRAS"
     else
         .venv/bin/pip install --upgrade pip
-        .venv/bin/pip install -e ".[test]"
+        .venv/bin/pip install -e "$EXTRAS"
     fi
 }
 

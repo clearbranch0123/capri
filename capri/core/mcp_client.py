@@ -26,6 +26,7 @@ import re
 import subprocess
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -36,6 +37,80 @@ _ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 MAX_MCP_FRAME_BYTES = 1024 * 1024  # 1 MiB max per JSON-RPC stdout frame (prevents OOM DoS)
 MAX_MCP_STDERR_LINE_BYTES = 4096
 _OVERSIZED_FRAME_MARKER = b"__CAPRI_MCP_OVERSIZED_FRAME__"
+
+# Minimal safe base environment passed to third-party MCP stdio servers.
+# Prevents Capri's own `.env` API keys (GROQ_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, etc.)
+# from leaking into external MCP child processes unless explicitly forwarded in `server.env`.
+MCP_ALLOWED_BASE_ENV_KEYS: frozenset[str] = frozenset({
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TERM",
+    "COLORTERM",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "PWD",
+    "SHLVL",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "XAUTHORITY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "NO_PROXY",
+    "no_proxy",
+    "VIRTUAL_ENV",
+    "PYTHONPATH",
+    "PYTHONUNBUFFERED",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+    "NODE_ENV",
+    "NVM_DIR",
+    "NPM_CONFIG_CACHE",
+    "NPM_CONFIG_PREFIX",
+    "PNPM_HOME",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "GOPATH",
+    "GOBIN",
+})
+MCP_ALLOWED_BASE_ENV_PREFIXES: tuple[str, ...] = ("LC_", "XDG_")
+MCP_PROXY_URL_ENV_KEYS: frozenset[str] = frozenset({
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+})
+
+
+def _has_url_userinfo(value: str) -> bool:
+    """Return True if a proxy URL contains embedded `user[:pass]@` credentials (fail-closed on parse errors)."""
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    candidate = raw if "://" in raw else f"http://{raw}"
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return True
+    return parsed.username is not None or parsed.password is not None or "@" in parsed.netloc
+
+
+def _is_safe_base_mcp_env_entry(key: str, value: str) -> bool:
+    if key in MCP_PROXY_URL_ENV_KEYS:
+        return not _has_url_userinfo(value)
+    return key in MCP_ALLOWED_BASE_ENV_KEYS or any(key.startswith(p) for p in MCP_ALLOWED_BASE_ENV_PREFIXES)
 
 
 def _escape_mcp_output_tags(text: str) -> str:
@@ -74,12 +149,23 @@ def sanitize_mcp_identifier(raw: str) -> str:
     return cleaned or "mcp"
 
 
-def expand_mcp_env(env_map: dict[str, str]) -> dict[str, str]:
-    """Build subprocess environment inheriting OS env and expanding `${VAR}` placeholders."""
-    merged = dict(os.environ)
+def expand_mcp_env(
+    env_map: dict[str, str],
+    base_env: Optional[dict[str, str]] = None,
+) -> dict[str, str]:
+    """Build an isolated subprocess environment using only allowlisted OS vars plus explicitly configured MCP vars.
+
+    `${VAR}` placeholders inside `env_map` are expanded from `base_env` (defaulting to `os.environ`)
+    only when explicitly referenced by the server's configuration, preventing accidental leakage of
+    unrelated Capri `.env` secrets (e.g. `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`).
+    """
+    source_env = os.environ if base_env is None else base_env
+    merged: dict[str, str] = {
+        k: v for k, v in source_env.items() if _is_safe_base_mcp_env_entry(k, v)
+    }
     for k, v in (env_map or {}).items():
         val_str = str(v)
-        expanded = _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), ""), val_str)
+        expanded = _ENV_REF_RE.sub(lambda m: source_env.get(m.group(1), ""), val_str)
         merged[str(k)] = expanded
     return merged
 

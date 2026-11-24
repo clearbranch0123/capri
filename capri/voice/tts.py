@@ -27,16 +27,30 @@ _ABBREV_END_RE = re.compile(
 
 class SentenceStreamSplitter:
     """
-    Incremental sentence splitter for live LLM token streaming -> TTS pipeline.
+    Incremental sentence & eager-clause splitter for live LLM token streaming -> TTS pipeline (Voice 3.0).
     - Feeds cumulative visible text (`feed_cumulative`) without repeating already-emitted text.
-    - Emits the first complete sentence as early as `min_first_chars` (~<1s time-to-first-audio).
+    - Emits the very first spoken chunk on natural clause breaks (`[,;:—–] `) once `eager_clause_min_chars`
+      is reached so time-to-first-word drops under ~0.7s on long opening sentences while keeping short
+      openers intact.
+    - Splits overly long run-on sentences (`>= max_clause_chars`) at clause boundaries so synthesis never stalls.
     - Respects Markdown fenced code blocks (never splits inside an unclosed ``` block).
     - Avoids false splits on decimals, version numbers (`v2.8.0b2`), and common abbreviations.
     """
 
-    def __init__(self, min_first_chars: int = 10, min_next_chars: int = 28):
+    def __init__(
+        self,
+        min_first_chars: int = 10,
+        min_next_chars: int = 28,
+        *,
+        eager_first_clause: bool = True,
+        eager_clause_min_chars: int = 28,
+        max_clause_chars: int = 110,
+    ):
         self.min_first_chars = max(4, int(min_first_chars))
         self.min_next_chars = max(8, int(min_next_chars))
+        self.eager_first_clause = bool(eager_first_clause)
+        self.eager_clause_min_chars = max(self.min_first_chars, int(eager_clause_min_chars))
+        self.max_clause_chars = max(48, int(max_clause_chars))
         self._emitted_offset: int = 0
         self._emitted_count: int = 0
         self._latest_text: str = ""
@@ -57,7 +71,13 @@ class SentenceStreamSplitter:
             pending = visible_text[self._emitted_offset:]
             min_len = self.min_first_chars if self._emitted_count == 0 else self.min_next_chars
 
-            split_rel = self._find_split_point(visible_text, self._emitted_offset, pending, min_len)
+            split_rel = self._find_split_point(
+                visible_text,
+                self._emitted_offset,
+                pending,
+                min_len,
+                is_first_chunk=(self._emitted_count == 0),
+            )
             if split_rel is None:
                 break
 
@@ -73,7 +93,13 @@ class SentenceStreamSplitter:
         return ready
 
     def _find_split_point(
-        self, full_text: str, base_offset: int, pending: str, min_len: int
+        self,
+        full_text: str,
+        base_offset: int,
+        pending: str,
+        min_len: int,
+        *,
+        is_first_chunk: bool = False,
     ) -> Optional[int]:
         # 1. Look for sentence-ending punctuation followed by whitespace (not decimal/version/abbrev)
         for m in re.finditer(r"([.!?…]+)(\s+)", pending):
@@ -99,6 +125,26 @@ class SentenceStreamSplitter:
         if para_idx >= min_len and not self._inside_code_fence(full_text, base_offset + para_idx):
             return para_idx + 2
 
+        # 3. Eager first-clause split (chunk #0) OR run-on clause split for long stream segments
+        allow_clause = (is_first_chunk and self.eager_first_clause) or (len(pending) >= self.max_clause_chars)
+        if allow_clause:
+            clause_min = self.eager_clause_min_chars if is_first_chunk else max(self.min_next_chars, self.max_clause_chars // 2)
+            for m in re.finditer(r"([,;:—–])(\s+)", pending):
+                punct_end = m.end(1)
+                abs_end = base_offset + punct_end
+                if self._inside_code_fence(full_text, abs_end):
+                    continue
+                before = pending[: m.start(1)]
+                after = pending[m.end(2) :]
+                # Ignore numeric commas like "3, 14" or incomplete trailing whitespace before next word starts
+                if m.group(1) == "," and before and before[-1].isdigit():
+                    continue
+                if len(after.strip()) < 4:
+                    continue
+                candidate = pending[:punct_end].strip()
+                if len(candidate) >= clause_min:
+                    return m.end(2)
+
         return None
 
     def flush(self) -> list[str]:
@@ -112,37 +158,77 @@ class SentenceStreamSplitter:
         return []
 
 
+def _decode_wav_mono_float32(audio_path: str) -> Optional[tuple[Any, int]]:
+    """Decode 8-bit, 16-bit, 24-bit, or 32-bit PCM `.wav` into mono float32 `[-1.0, 1.0]` + sample_rate."""
+    if not audio_path or not audio_path.lower().endswith(".wav") or not os.path.exists(audio_path):
+        return None
+    try:
+        import numpy as np
+
+        with wave.open(audio_path, "rb") as wf:
+            n_channels = max(1, wf.getnchannels())
+            sampwidth = wf.getsampwidth()
+            rate = wf.getframerate()
+            n_frames = wf.getnframes()
+            raw = wf.readframes(n_frames)
+        if rate <= 0 or not raw:
+            return None
+
+        samples = None
+        if sampwidth == 2:
+            usable = (len(raw) // 2) * 2
+            samples = np.frombuffer(raw[:usable], dtype="<i2").astype(np.float32) / 32768.0
+        elif sampwidth == 3:
+            usable = (len(raw) // 3) * 3
+            if usable >= 3:
+                b = np.frombuffer(raw[:usable], dtype=np.uint8).reshape(-1, 3)
+                s32 = (
+                    b[:, 0].astype(np.int32)
+                    | (b[:, 1].astype(np.int32) << 8)
+                    | (b[:, 2].astype(np.int8).astype(np.int32) << 16)
+                )
+                samples = s32.astype(np.float32) / 8388608.0
+        elif sampwidth == 1:
+            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        elif sampwidth == 4:
+            usable = (len(raw) // 4) * 4
+            samples = np.frombuffer(raw[:usable], dtype="<i4").astype(np.float32) / 2147483648.0
+
+        if samples is None or samples.size == 0:
+            return None
+        if n_channels > 1:
+            usable_samples = (samples.size // n_channels) * n_channels
+            if usable_samples == 0:
+                return None
+            samples = samples[:usable_samples].reshape(-1, n_channels).mean(axis=1)
+        return samples, int(rate)
+    except Exception:
+        return None
+
+
 def compute_speech_envelope(audio_path: Optional[str], phrase: str = "", fps: int = 15) -> list[int]:
     """
     Build a 0..4 mouth-openness lip-sync envelope synced to ~15 FPS:
-    - For WAV audio: computes real per-frame RMS amplitude directly from PCM samples.
+    - For WAV audio (8/16/24/32-bit PCM): computes real per-frame RMS amplitude directly from samples.
     - For MP3/compressed audio: generates a syllable/phoneme-timed cadence envelope
       from `phrase` (open vowels -> 3..4, soft vowels -> 2, consonants -> 1, pauses -> 0).
     """
-    if audio_path and audio_path.lower().endswith(".wav") and os.path.exists(audio_path):
+    decoded = _decode_wav_mono_float32(audio_path) if audio_path else None
+    if decoded is not None:
         try:
             import numpy as np
 
-            with wave.open(audio_path, "rb") as wf:
-                n_channels = wf.getnchannels()
-                sampwidth = wf.getsampwidth()
-                rate = wf.getframerate()
-                n_frames = wf.getnframes()
-                raw = wf.readframes(n_frames)
-            if sampwidth == 2 and rate > 0 and raw:
-                samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                if n_channels > 1:
-                    samples = samples.reshape(-1, n_channels).mean(axis=1)
-                step = max(1, int(rate / max(1, fps)))
-                rms_vals: list[float] = []
-                for idx in range(0, len(samples), step):
-                    sl = samples[idx : idx + step]
-                    if sl.size > 0:
-                        rms_vals.append(float(np.sqrt(np.mean(sl * sl))))
-                if rms_vals:
-                    peak = max(max(rms_vals), 0.05)
-                    env = [min(4, max(0, int(round((v / peak) * 4.0)))) for v in rms_vals]
-                    return env[:300]
+            samples, rate = decoded
+            step = max(1, int(rate / max(1, fps)))
+            rms_vals = [
+                float(np.sqrt(np.mean(samples[idx : idx + step] * samples[idx : idx + step])))
+                for idx in range(0, samples.size, step)
+                if samples[idx : idx + step].size > 0
+            ]
+            if rms_vals:
+                peak = max(max(rms_vals), 0.05)
+                env = [min(4, max(0, int(round((v / peak) * 4.0)))) for v in rms_vals]
+                return env[:300]
         except Exception:
             pass
 
@@ -169,6 +255,151 @@ def compute_speech_envelope(audio_path: Optional[str], phrase: str = "", fps: in
         return [1, 2, 3, 2, 0]
     env.append(0)
     return env[:300]
+
+
+def _smooth_level_series(raw_levels: list[float], attack: float = 0.62, release: float = 0.34) -> list[float]:
+    """Apply asymmetric attack/release smoothing so hologram rings react crisply without jitter."""
+    if not raw_levels:
+        return []
+    out: list[float] = []
+    cur = 0.0
+    for target in raw_levels:
+        clamped = max(0.0, min(1.0, float(target)))
+        alpha = attack if clamped >= cur else release
+        cur = cur + (clamped - cur) * alpha
+        out.append(round(cur, 3))
+    return out
+
+
+def compute_audio_level_curve(
+    audio_path: Optional[str],
+    phrase: str = "",
+    fps: int = 25,
+) -> tuple[list[float], float]:
+    """
+    Build a continuous normalized `0.0..1.0` audio-level envelope at `fps` Hz + duration in seconds
+    for Capri's audio-reactive hologram projection rings (Voice 3.0):
+    1. `.wav` files: decodes real PCM samples (8/16/24/32-bit) via `wave` + `numpy`.
+    2. Compressed files (`.mp3`/`.ogg`/`.opus`): decodes real PCM via `av` (PyAV) when installed,
+       falling back to fast filesize/syllable cadence estimation with zero subprocess overhead.
+    """
+    fps_safe = max(5, int(fps))
+
+    # 1. Exact PCM decoding for WAV files (8/16/24/32-bit)
+    decoded = _decode_wav_mono_float32(audio_path) if audio_path else None
+    if decoded is not None:
+        try:
+            import numpy as np
+
+            samples, rate = decoded
+            duration = float(samples.size) / float(rate)
+            step = max(1, int(round(rate / float(fps_safe))))
+            rms_vals = [
+                float(np.sqrt(np.mean(samples[i : i + step] * samples[i : i + step])))
+                for i in range(0, samples.size, step)
+                if samples[i : i + step].size > 0
+            ]
+            if rms_vals:
+                peak = max(max(rms_vals), 0.045)
+                norm = [min(1.0, max(0.0, (v / peak) ** 0.82)) for v in rms_vals]
+                return _smooth_level_series(norm)[:750], max(0.05, duration)
+        except Exception:
+            pass
+
+    # 2. Optional in-process PyAV PCM decoding for MP3 / OGG / OPUS
+    if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 64:
+        try:
+            import av  # type: ignore[import-not-found]
+            import numpy as np
+
+            chunks_f32: list[Any] = []
+            sample_rate = 24000
+            with av.open(audio_path) as container:
+                audio_streams = [s for s in container.streams if s.type == "audio"]
+                if audio_streams:
+                    stream = audio_streams[0]
+                    sample_rate = int(stream.rate or 24000)
+                    for frame in container.decode(stream):
+                        arr = frame.to_ndarray()
+                        if arr.ndim == 2:
+                            arr_f = arr.astype(np.float32)
+                            mono = arr_f.mean(axis=0) if arr.shape[0] <= 8 else arr_f.mean(axis=1)
+                        else:
+                            mono = arr.astype(np.float32)
+                        max_abs = float(np.max(np.abs(mono))) if mono.size else 0.0
+                        if max_abs > 1.5:
+                            mono = mono / 32768.0
+                        chunks_f32.append(mono)
+            if chunks_f32 and sample_rate > 0:
+                full = np.concatenate(chunks_f32)
+                if full.size > 0:
+                    duration = float(full.size) / float(sample_rate)
+                    step = max(1, int(round(sample_rate / float(fps_safe))))
+                    rms_vals = [
+                        float(np.sqrt(np.mean(full[i : i + step] * full[i : i + step])))
+                        for i in range(0, full.size, step)
+                        if full[i : i + step].size > 0
+                    ]
+                    if rms_vals:
+                        peak = max(max(rms_vals), 0.045)
+                        norm = [min(1.0, max(0.0, (v / peak) ** 0.82)) for v in rms_vals]
+                        return _smooth_level_series(norm)[:750], max(0.05, duration)
+        except Exception:
+            pass
+
+    # 3. Pure-Python syllabic cadence curve with MP3 filesize / text-length duration estimate
+    mouth_steps = compute_speech_envelope(None, phrase=phrase, fps=fps_safe)
+    est_dur = max(0.35, len((phrase or "").strip()) * 0.062)
+    if audio_path and os.path.exists(audio_path):
+        try:
+            fsize = os.path.getsize(audio_path)
+            if fsize > 256:
+                # Typical 48–64 kbps speech MP3 ~= 6000–8000 bytes/sec
+                est_dur = max(0.25, min(30.0, fsize / 7000.0))
+        except OSError:
+            pass
+    target_frames = max(4, min(750, int(round(est_dur * fps_safe))))
+    raw_curve: list[float] = []
+    src_len = max(1, len(mouth_steps))
+    for i in range(target_frames):
+        src_idx = min(src_len - 1, int((i / float(target_frames)) * src_len))
+        raw_curve.append(min(1.0, max(0.0, mouth_steps[src_idx] / 4.0)))
+    return _smooth_level_series(raw_curve), est_dur
+
+
+class _AsyncTTSAudioLevelDispatcher:
+    """Non-blocking latest-value IPC sender so 25 Hz hologram updates never stall asyncio."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._pending: Optional[float] = None
+        self._started = False
+
+    def emit(self, level: float) -> None:
+        clamped = max(0.0, min(1.0, float(level)))
+        with self._cond:
+            self._pending = clamped
+            if not self._started:
+                self._started = True
+                threading.Thread(target=self._run, name="capri-tts-level-ipc", daemon=True).start()
+            self._cond.notify()
+
+    def _run(self) -> None:
+        from ..ui.client import notify_avatar_audio_level
+
+        while True:
+            with self._cond:
+                while self._pending is None:
+                    self._cond.wait()
+                val = self._pending
+                self._pending = None
+            try:
+                notify_avatar_audio_level(val, source="tts")
+            except Exception:
+                pass
+
+
+_TTS_LEVEL_DISPATCHER = _AsyncTTSAudioLevelDispatcher()
 
 
 def chunk_text_for_speech(text: str, min_chars: int = 30) -> list[str]:
@@ -295,6 +526,15 @@ class XTTSDaemonClient:
         self.venv_python = venv_python
         self.worker_script = worker_script
         self.proc: Optional[asyncio.subprocess.Process] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop_id: Optional[int] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        loop_id = id(asyncio.get_running_loop())
+        if self._lock is None or self._lock_loop_id != loop_id:
+            self._lock = asyncio.Lock()
+            self._lock_loop_id = loop_id
+        return self._lock
 
     def _close_proc_transport(self) -> None:
         proc = self.proc
@@ -346,33 +586,34 @@ class XTTSDaemonClient:
                 self._close_proc_transport()
 
     async def synthesize(self, text: str, output_path: str, speaker_path: str) -> bool:
-        await self.ensure_running()
-        if not self.proc or not self.proc.stdin or not self.proc.stdout:
-            return False
-
-        req = json.dumps({"text": text, "output": output_path, "speaker": speaker_path, "language": "ru"})
-        self.proc.stdin.write((req + "\n").encode())
-        await self.proc.stdin.drain()
-
-        while True:
-            res_line = await self.proc.stdout.readline()
-            if not res_line:
-                self._close_proc_transport()
+        async with self._get_lock():
+            await self.ensure_running()
+            if not self.proc or not self.proc.stdin or not self.proc.stdout:
                 return False
-            decoded = res_line.decode().strip()
-            if not decoded:
-                continue
-            try:
-                res = json.loads(decoded)
-                if res.get("status") == "ok":
-                    dur = res.get("duration", 0)
-                    print(f"[XTTS] Сгенерировано за {dur} сек. Воспроизведение...", flush=True)
-                    return True
-                else:
-                    print(f"[XTTS Worker Error]: {res.get('message')}", flush=True)
+
+            req = json.dumps({"text": text, "output": output_path, "speaker": speaker_path, "language": "ru"})
+            self.proc.stdin.write((req + "\n").encode())
+            await self.proc.stdin.drain()
+
+            while True:
+                res_line = await self.proc.stdout.readline()
+                if not res_line:
+                    self._close_proc_transport()
                     return False
-            except json.JSONDecodeError:
-                continue
+                decoded = res_line.decode().strip()
+                if not decoded:
+                    continue
+                try:
+                    res = json.loads(decoded)
+                    if res.get("status") == "ok":
+                        dur = res.get("duration", 0)
+                        print(f"[XTTS] Сгенерировано за {dur} сек. Воспроизведение...", flush=True)
+                        return True
+                    else:
+                        print(f"[XTTS Worker Error]: {res.get('message')}", flush=True)
+                        return False
+                except json.JSONDecodeError:
+                    continue
 
     async def stop(self):
         proc = self.proc
@@ -390,6 +631,15 @@ class SileroDaemonClient:
         self.venv_python = venv_python
         self.worker_script = worker_script
         self.proc: Optional[asyncio.subprocess.Process] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop_id: Optional[int] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        loop_id = id(asyncio.get_running_loop())
+        if self._lock is None or self._lock_loop_id != loop_id:
+            self._lock = asyncio.Lock()
+            self._lock_loop_id = loop_id
+        return self._lock
 
     def _close_proc_transport(self) -> None:
         proc = self.proc
@@ -439,30 +689,31 @@ class SileroDaemonClient:
                 self._close_proc_transport()
 
     async def synthesize(self, text: str, output_path: str, speaker: str = "baya") -> bool:
-        await self.ensure_running()
-        if not self.proc or not self.proc.stdin or not self.proc.stdout:
-            return False
-
-        req = json.dumps({"text": text, "output": output_path, "speaker": speaker, "sample_rate": 24000})
-        self.proc.stdin.write((req + "\n").encode())
-        await self.proc.stdin.drain()
-
-        while True:
-            res_line = await self.proc.stdout.readline()
-            if not res_line:
-                self._close_proc_transport()
+        async with self._get_lock():
+            await self.ensure_running()
+            if not self.proc or not self.proc.stdin or not self.proc.stdout:
                 return False
-            decoded = res_line.decode().strip()
-            if not decoded:
-                continue
-            try:
-                res = json.loads(decoded)
-                if res.get("status") == "ok":
-                    return True
-                else:
+
+            req = json.dumps({"text": text, "output": output_path, "speaker": speaker, "sample_rate": 24000})
+            self.proc.stdin.write((req + "\n").encode())
+            await self.proc.stdin.drain()
+
+            while True:
+                res_line = await self.proc.stdout.readline()
+                if not res_line:
+                    self._close_proc_transport()
                     return False
-            except json.JSONDecodeError:
-                continue
+                decoded = res_line.decode().strip()
+                if not decoded:
+                    continue
+                try:
+                    res = json.loads(decoded)
+                    if res.get("status") == "ok":
+                        return True
+                    else:
+                        return False
+                except json.JSONDecodeError:
+                    continue
 
     async def stop(self):
         proc = self.proc
@@ -475,16 +726,54 @@ class SileroDaemonClient:
         self._close_proc_transport()
 
 
+class _PrefetchWindowSlot:
+    """Idempotent sliding-window token held from pre-synthesis until playback finishes (or cancels)."""
+
+    __slots__ = ("_sem", "_released")
+
+    def __init__(self, sem: asyncio.Semaphore) -> None:
+        self._sem = sem
+        self._released = False
+
+    def release(self) -> None:
+        if not self._released:
+            self._released = True
+            self._sem.release()
+
+
+def _purge_synth_task_file(task: asyncio.Task) -> None:
+    """Done-callback ensuring cancelled/unconsumed synthesis tasks release window slots and never leak `/tmp`."""
+    if task.cancelled():
+        return
+    try:
+        res = task.result()
+        path: Optional[str] = None
+        slot: Optional[_PrefetchWindowSlot] = None
+        if isinstance(res, tuple) and len(res) == 2:
+            path, slot = res
+        elif isinstance(res, str):
+            path = res
+        if slot is not None:
+            slot.release()
+        if isinstance(path, str) and path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
 class StreamingTTSSession:
     """
-    Sentence-level streaming TTS pipeline with parallel synthesis prefetch
-    and immediate cancellation/barge-in support.
+    Voice 3.0 sentence-level streaming TTS pipeline with a true sliding lookahead window
+    (`active playing chunk + buffered prefetched chunks <= max_prefetch`), seamless hologram
+    aura continuity, and leak-free barge-in cancellation.
     """
 
-    def __init__(self, tts: "VoiceSynthesizer"):
+    def __init__(self, tts: "VoiceSynthesizer", max_prefetch: int = 3):
         self.tts = tts
         self.engine = (tts.config.tts_engine or "edge").lower()
-        self._queue: asyncio.Queue[Optional[tuple[str, asyncio.Task[Optional[str]]]]] = asyncio.Queue()
+        self.max_prefetch = max(1, int(max_prefetch))
+        self._prefetch_sem = asyncio.Semaphore(self.max_prefetch)
+        self._queue: asyncio.Queue[Optional[tuple[str, asyncio.Task[tuple[Optional[str], Optional[_PrefetchWindowSlot]]]]]] = asyncio.Queue()
         self._consumer_task: Optional[asyncio.Task] = None
         self._synth_tasks: list[asyncio.Task] = []
         self._cancelled = False
@@ -499,6 +788,27 @@ class StreamingTTSSession:
     def played_count(self) -> int:
         return self._played_count
 
+    async def _prefetched_synth(self, cleaned: str) -> tuple[Optional[str], Optional[_PrefetchWindowSlot]]:
+        await self._prefetch_sem.acquire()
+        slot = _PrefetchWindowSlot(self._prefetch_sem)
+        try:
+            if self._cancelled or self.tts._is_stopped:
+                slot.release()
+                return None, None
+            path = await self.tts._synthesize_chunk_file(cleaned)
+            if self._cancelled or self.tts._is_stopped or not path:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                slot.release()
+                return None, None
+            return path, slot
+        except BaseException:
+            slot.release()
+            raise
+
     def push(self, raw_sentence: str) -> bool:
         if self._cancelled or self.tts._is_stopped or not self.tts.config.tts_enabled:
             return False
@@ -507,13 +817,15 @@ class StreamingTTSSession:
             return False
         if self._consumer_task is None:
             self._consumer_task = asyncio.create_task(self._consume())
-        synth_task = asyncio.create_task(self.tts._synthesize_chunk_file(cleaned))
+        synth_task = asyncio.create_task(self._prefetched_synth(cleaned))
         self._synth_tasks.append(synth_task)
         self._queue.put_nowait((cleaned, synth_task))
         self._pushed_count += 1
         return True
 
     async def _consume(self):
+        current_audio_path: Optional[str] = None
+        current_slot: Optional[_PrefetchWindowSlot] = None
         try:
             while not self._cancelled and not self.tts._is_stopped:
                 item = await self._queue.get()
@@ -521,34 +833,75 @@ class StreamingTTSSession:
                     break
                 phrase, synth_task = item
                 audio_path: Optional[str] = None
+                slot: Optional[_PrefetchWindowSlot] = None
                 try:
-                    audio_path = await synth_task
+                    audio_path, slot = await synth_task
                 except asyncio.CancelledError:
                     break
                 except Exception as ex:
                     print(f"[Streaming TTS] Ошибка синтеза фрагмента: {ex}")
                     continue
 
+                current_slot = slot
                 if self._cancelled or self.tts._is_stopped:
                     if audio_path and os.path.exists(audio_path):
                         try:
                             os.remove(audio_path)
                         except OSError:
                             pass
+                    if current_slot is not None:
+                        current_slot.release()
+                        current_slot = None
                     break
 
                 if not audio_path or not os.path.exists(audio_path):
+                    if current_slot is not None:
+                        current_slot.release()
+                        current_slot = None
                     continue
 
-                played = await self.tts._play_audio_file(audio_path, phrase=phrase)
+                current_audio_path = audio_path
+                # Check if another real sentence is already queued right behind this one
+                has_more = False
+                if not self._queue.empty():
+                    try:
+                        nxt = self._queue._queue[0]  # type: ignore[attr-defined]
+                        has_more = nxt is not None
+                    except Exception:
+                        has_more = True
+
+                try:
+                    played = await self.tts._play_audio_file(audio_path, phrase=phrase, seamless_follow=has_more)
+                except TypeError:
+                    played = await self.tts._play_audio_file(audio_path, phrase=phrase)
+                finally:
+                    if current_audio_path and os.path.exists(current_audio_path):
+                        try:
+                            os.remove(current_audio_path)
+                        except OSError:
+                            pass
+                    current_audio_path = None
+                    # Release sliding-window slot AFTER playback finishes so chunk N+max_prefetch wakes up now
+                    if current_slot is not None:
+                        current_slot.release()
+                        current_slot = None
                 if played:
                     self._played_count += 1
         except asyncio.CancelledError:
             pass
         finally:
+            if current_audio_path and os.path.exists(current_audio_path):
+                try:
+                    os.remove(current_audio_path)
+                except OSError:
+                    pass
+            if current_slot is not None:
+                current_slot.release()
+                current_slot = None
             self._cleanup_pending_tasks()
             if self.tts._active_stream_session is self:
                 self.tts._active_stream_session = None
+            _TTS_LEVEL_DISPATCHER.emit(0.0)
             try:
                 from ..ui.client import notify_avatar
                 notify_avatar("idle")
@@ -556,20 +909,23 @@ class StreamingTTSSession:
                 pass
 
     def _cleanup_pending_tasks(self):
-        for t in self._synth_tasks:
+        for t in list(self._synth_tasks):
             if not t.done():
+                t.add_done_callback(_purge_synth_task_file)
                 t.cancel()
             else:
-                try:
-                    res = t.result()
-                    if isinstance(res, str) and os.path.exists(res):
-                        os.remove(res)
-                except Exception:
-                    pass
+                _purge_synth_task_file(t)
         self._synth_tasks.clear()
         while not self._queue.empty():
             try:
-                self._queue.get_nowait()
+                queued = self._queue.get_nowait()
+                if queued is not None:
+                    _, qt = queued
+                    if qt.done():
+                        _purge_synth_task_file(qt)
+                    else:
+                        qt.add_done_callback(_purge_synth_task_file)
+                        qt.cancel()
             except Exception:
                 break
 
@@ -618,14 +974,15 @@ class VoiceSynthesizer:
         self._is_stopped = False
         self._stop_event = threading.Event()
         self._fish_ref_bytes_cache: Optional[bytes] = None
+        self._fish_client_cache: tuple[Optional[str], Optional[int], Any] = (None, None, None)
 
-    def start_stream_session(self) -> StreamingTTSSession:
-        """Start a sentence-streaming TTS session (prefetch + ordered playback + instant interrupt)."""
+    def start_stream_session(self, max_prefetch: int = 3) -> StreamingTTSSession:
+        """Start a sentence-streaming TTS session (bounded prefetch + ordered playback + instant interrupt)."""
         if self._active_stream_session is not None:
             self._active_stream_session.cancel()
         self._is_stopped = False
         self._stop_event.clear()
-        session = StreamingTTSSession(self)
+        session = StreamingTTSSession(self, max_prefetch=max_prefetch)
         self._active_stream_session = session
         return session
 
@@ -674,11 +1031,24 @@ class VoiceSynthesizer:
         except Exception:
             pass
 
+        _TTS_LEVEL_DISPATCHER.emit(0.0)
         try:
             from ..ui.client import notify_avatar
             notify_avatar("idle")
         except Exception:
             pass
+
+    def _get_fish_client(self, api_key: str) -> Any:
+        """Reuse AsyncFishAudio HTTP/TLS connection pool across prefetched chunks on the same event loop."""
+        from fishaudio import AsyncFishAudio
+
+        loop_id = id(asyncio.get_running_loop())
+        cached_key, cached_loop, cached_client = self._fish_client_cache
+        if cached_client is not None and cached_key == api_key and cached_loop == loop_id:
+            return cached_client
+        client = AsyncFishAudio(api_key=api_key)
+        self._fish_client_cache = (api_key, loop_id, client)
+        return client
 
     def _get_fish_ref_bytes(self) -> Optional[bytes]:
         if self._fish_ref_bytes_cache is not None:
@@ -696,7 +1066,12 @@ class VoiceSynthesizer:
     async def _synthesize_edge_file(self, text: str) -> Optional[str]:
         if self._is_stopped:
             return None
-        import edge_tts
+        try:
+            import edge_tts
+        except ImportError as e:
+            if not self._is_stopped:
+                print(f"[Edge TTS Error]: edge-tts is not installed ({e})")
+            return None
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             tmp_path = tmp.name
@@ -770,10 +1145,9 @@ class VoiceSynthesizer:
         if not api_key:
             return None
         try:
-            from fishaudio import AsyncFishAudio
             from fishaudio.types import ReferenceAudio
 
-            client = AsyncFishAudio(api_key=api_key)
+            client = self._get_fish_client(api_key)
             voice_id = self.config.fish_audio_voice_id or os.getenv("FISH_AUDIO_VOICE_ID", "")
             kwargs: dict[str, Any] = {
                 "text": text,
@@ -916,8 +1290,27 @@ class VoiceSynthesizer:
             path = await self._synthesize_edge_file(clean_text)
         return path
 
-    async def _play_audio_file(self, audio_path: str, phrase: str = "") -> bool:
-        """Play a temporary audio file via mpv (with pw-play/paplay fallback) and always delete it."""
+    async def _stream_playback_envelope(self, curve: list[float], fps: int = 25, seamless_follow: bool = False) -> None:
+        """Emit smooth 25 Hz normalized TTS audio levels to Capri's hologram aura while `mpv` plays."""
+        if not curve:
+            return
+        step_s = 1.0 / float(max(5, fps))
+        try:
+            for val in curve:
+                if self._is_stopped:
+                    _TTS_LEVEL_DISPATCHER.emit(0.0)
+                    return
+                _TTS_LEVEL_DISPATCHER.emit(val)
+                await asyncio.sleep(step_s)
+            # Hold a soft holographic floor across back-to-back prefetched sentences so rings don't flicker off
+            _TTS_LEVEL_DISPATCHER.emit(0.14 if (seamless_follow and not self._is_stopped) else 0.0)
+        except asyncio.CancelledError:
+            if self._is_stopped or not seamless_follow:
+                _TTS_LEVEL_DISPATCHER.emit(0.0)
+            raise
+
+    async def _play_audio_file(self, audio_path: str, phrase: str = "", seamless_follow: bool = False) -> bool:
+        """Play a temporary audio file via mpv (with pw-play/paplay fallback), stream 25 Hz aura levels, and delete it."""
         if self._is_stopped or not audio_path or not os.path.exists(audio_path):
             if audio_path and os.path.exists(audio_path):
                 try:
@@ -926,12 +1319,14 @@ class VoiceSynthesizer:
                     pass
             return False
 
+        level_curve: list[float] = []
         try:
             from ..ui.client import notify_avatar
             envelope = compute_speech_envelope(audio_path, phrase=phrase, fps=15)
+            level_curve, _dur = compute_audio_level_curve(audio_path, phrase=phrase, fps=25)
             notify_avatar("speaking", phrase, metadata={"mouth_envelope": envelope})
         except Exception:
-            pass
+            level_curve = []
 
         cmd: Optional[list[str]] = None
         if shutil.which("mpv"):
@@ -977,6 +1372,7 @@ class VoiceSynthesizer:
             except Exception:
                 mirror_cmd = None
 
+        env_task: Optional[asyncio.Task] = None
         try:
             self._current_process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -984,6 +1380,10 @@ class VoiceSynthesizer:
                 stderr=asyncio.subprocess.DEVNULL,
                 stdin=asyncio.subprocess.DEVNULL,
             )
+            if level_curve:
+                env_task = asyncio.create_task(
+                    self._stream_playback_envelope(level_curve, fps=25, seamless_follow=seamless_follow)
+                )
             if mirror_cmd is not None:
                 self._mirror_process = await asyncio.create_subprocess_exec(
                     *mirror_cmd,
@@ -999,8 +1399,17 @@ class VoiceSynthesizer:
                 )
             else:
                 await self._current_process.wait()
+            if env_task is not None and not env_task.done():
+                env_task.cancel()
+                try:
+                    await env_task
+                except asyncio.CancelledError:
+                    pass
+            _TTS_LEVEL_DISPATCHER.emit(0.14 if (seamless_follow and not self._is_stopped) else 0.0)
             return not self._is_stopped
         except asyncio.CancelledError:
+            if env_task is not None and not env_task.done():
+                env_task.cancel()
             for p in (self._current_process, self._mirror_process):
                 if p and p.returncode is None:
                     try:
@@ -1009,6 +1418,8 @@ class VoiceSynthesizer:
                         pass
             raise
         except Exception:
+            if env_task is not None and not env_task.done():
+                env_task.cancel()
             return False
         finally:
             for p in (self._current_process, self._mirror_process):
@@ -1171,10 +1582,9 @@ class VoiceSynthesizer:
 
         fetch_tasks = []
         try:
-            from fishaudio import AsyncFishAudio
             from fishaudio.types import ReferenceAudio
 
-            client = AsyncFishAudio(api_key=api_key)
+            client = self._get_fish_client(api_key)
             voice_id = self.config.fish_audio_voice_id or os.getenv("FISH_AUDIO_VOICE_ID", "")
 
             ref_bytes = self._get_fish_ref_bytes() if not voice_id else None
@@ -1415,7 +1825,12 @@ class VoiceSynthesizer:
         """Облачный синтез через Edge-TTS."""
         if self._is_stopped:
             return
-        import edge_tts
+        try:
+            import edge_tts
+        except ImportError as e:
+            if not self._is_stopped:
+                print(f"[Edge TTS Error]: edge-tts is not installed ({e})")
+            return
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             tmp_path = tmp.name

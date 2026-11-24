@@ -24,12 +24,20 @@ def get_cyberdeck_ipc_socket_path() -> str:
     return f"/tmp/capri-cyberdeck-{uid}.sock"
 
 
-def send_cyberdeck_command(cmd: str, socket_path: Optional[str] = None, timeout: float = 0.25) -> bool:
-    """Send a lightweight JSON command ('toggle'|'show'|'hide'|'quit'|'voice_toggle'|'voice_stop') to Cyberdeck."""
+def send_cyberdeck_command(
+    cmd: str,
+    socket_path: Optional[str] = None,
+    timeout: float = 0.25,
+    extra: Optional[dict] = None,
+) -> bool:
+    """Send a lightweight JSON command ('toggle'|'show'|'hide'|'quit'|'voice_toggle'|'voice_stop'|'focus_gate') to Cyberdeck."""
     target = socket_path or get_cyberdeck_ipc_socket_path()
     if not os.path.exists(target):
         return False
-    raw = (json.dumps({"cmd": str(cmd).strip().lower()}) + "\n").encode("utf-8")
+    body: dict = {"cmd": str(cmd).strip().lower()}
+    if isinstance(extra, dict):
+        body.update(extra)
+    raw = (json.dumps(body) + "\n").encode("utf-8")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)

@@ -33,6 +33,7 @@ from capri.core.mcp_client import (
     MAX_MCP_FRAME_BYTES,
     MCPManager,
     MCPStdioClient,
+    expand_mcp_env,
     format_mcp_call_result,
 )
 from capri.core.policy import (
@@ -627,3 +628,94 @@ def test_run_bash_and_find_files_bound_subprocess_output_and_terminate_process(t
     out_find = asyncio.run(find_files("*.txt", str(many_dir)))
     assert "вывод find ограничен" in out_find.lower()
     assert len(out_find) < 4000
+
+
+def test_mcp_env_isolation_blocks_host_api_keys_and_allows_explicit_config(monkeypatch):
+    """
+    Third-party MCP child processes MUST NOT inherit Capri's `.env` API keys from `os.environ`.
+    Only allowlisted non-secret runtime variables plus variables explicitly declared in
+    `mcp.servers[*].env` (including explicit `${VAR}` expansions) may be passed to the subprocess.
+    """
+    leaked_candidates = {
+        "GROQ_API_KEY": "gsk_host_secret_must_never_leak_111",
+        "DEEPSEEK_API_KEY": "sk_deepseek_host_secret_222",
+        "GEMINI_API_KEY": "AIzaSyHostSecretMustNotLeak333",
+        "OPENAI_API_KEY": "sk-openai-host-secret-444",
+        "FISH_AUDIO_API_KEY": "fish_secret_555",
+        "ELEVENLABS_API_KEY": "el_secret_666",
+        "UNRELATED_PRIVATE_TOKEN": "private_token_777",
+    }
+    for k, v in leaked_candidates.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("ALLOWED_MCP_TOKEN", "explicit_mcp_token_888")
+    # Proxy URLs with embedded userinfo credentials must NOT leak; unauthenticated proxy URLs remain allowed
+    monkeypatch.setenv("HTTPS_PROXY", "http://alice:proxyS3cretPass@corp-proxy.internal:8080")
+    monkeypatch.setenv("ALL_PROXY", "alice:schemelessS3cret@corp-proxy.internal:1080")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+
+    # 1. Direct unit check of expand_mcp_env()
+    built = expand_mcp_env({"EXPLICIT_TOKEN": "${ALLOWED_MCP_TOKEN}", "STATIC_OPT": "enabled"})
+    assert built["EXPLICIT_TOKEN"] == "explicit_mcp_token_888"
+    assert built["STATIC_OPT"] == "enabled"
+    assert "PATH" in built
+    assert built["HTTP_PROXY"] == "http://127.0.0.1:7890"
+    assert "HTTPS_PROXY" not in built
+    assert "ALL_PROXY" not in built
+    for forbidden_key in (*leaked_candidates.keys(), "ALLOWED_MCP_TOKEN"):
+        assert forbidden_key not in built, f"Host env var {forbidden_key} leaked into MCP env"
+
+    # Explicit opt-in still allows passing an authenticated proxy to a specific MCP server
+    explicit_proxy = expand_mcp_env({"HTTPS_PROXY": "${HTTPS_PROXY}"})
+    assert explicit_proxy["HTTPS_PROXY"] == "http://alice:proxyS3cretPass@corp-proxy.internal:8080"
+
+    # 2. End-to-end verification against a real spawned MCPStdioClient child process
+    env_inspector_server = """
+import json, os, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    m = msg.get("method")
+    rid = msg.get("id")
+    if m == "initialize":
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0", "id": rid,
+            "result": {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "env-audit"}}
+        }) + "\\n")
+        sys.stdout.flush()
+    elif m == "tools/list":
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0", "id": rid,
+            "result": {"tools": [{"name": "dump_env", "description": "dump env", "inputSchema": {"type": "object", "properties": {}}}]}
+        }) + "\\n")
+        sys.stdout.flush()
+    elif m == "tools/call":
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0", "id": rid,
+            "result": {"isError": False, "content": [{"type": "text", "text": json.dumps(dict(os.environ))}]}
+        }) + "\\n")
+        sys.stdout.flush()
+"""
+    client = MCPStdioClient(
+        name="env_audit",
+        command=sys.executable,
+        args=["-u", "-c", env_inspector_server],
+        env={"EXPLICIT_TOKEN": "${ALLOWED_MCP_TOKEN}", "STATIC_OPT": "enabled"},
+        timeout=4.0,
+    )
+    try:
+        tools = client.connect_sync()
+        assert any(t.remote_name == "dump_env" for t in tools)
+        out = client.call_tool_sync("dump_env", {})
+        assert "explicit_mcp_token_888" in out
+        assert "enabled" in out
+        assert "http://127.0.0.1:7890" in out
+        assert "proxyS3cretPass" not in out
+        assert "schemelessS3cret" not in out
+        for forbidden_key, forbidden_val in leaked_candidates.items():
+            assert forbidden_key not in out, f"Leaked key {forbidden_key} visible inside MCP subprocess"
+            assert forbidden_val not in out, f"Leaked value of {forbidden_key} visible inside MCP subprocess"
+        assert "ALLOWED_MCP_TOKEN" not in out
+    finally:
+        client.disconnect_sync()

@@ -1,0 +1,84 @@
+# Maintainer: D <clearbranch0123@users.noreply.github.com>
+pkgname=capri-companion
+pkgver=3.6.0
+pkgrel=1
+pkgdesc="Cyberpunk local-first AI companion for Wayland (Niri / Hyprland / wlroots) & PipeWire"
+arch=('any')
+url="https://github.com/clearbranch0123/capri"
+license=('MIT' 'LicenseRef-PolyForm-Noncommercial-1.0.0')
+depends=(
+    'python>=3.10'
+    'qt6-wayland'
+    'pyside6'
+    'python-aiohttp'
+    'python-evdev'
+    'python-httpx'
+    'python-numpy'
+    'python-openai'
+    'python-pillow'
+    'python-pydantic'
+    'python-dotenv'
+    'python-yaml'
+    'python-rich'
+)
+makedepends=(
+    'python-build'
+    'python-installer'
+    'python-setuptools'
+    'python-wheel'
+)
+optdepends=(
+    'niri: full window-shelf perching, Game Mode, workspace pinning, and /wm-rules'
+    'hyprland: full window-shelf perching, Game Mode, workspace pinning, and /wm-rules'
+    'sway: native zwlr_layer_shell_v1 click-through desktop avatar'
+    'pipewire-pulse: PipeWire audio, WebRTC AEC, and Join Voice virtual mic'
+    'mpv: low-latency streaming TTS playback'
+    'grim: Wayland screenshots (/look) and screen-region capture'
+    'slurp: interactive Wayland screen-region selection'
+    'wl-clipboard: Ctrl+V screenshot paste in Cyberdeck and Quick Ask'
+    'portaudio: microphone recording (Ctrl+M), Wake-Word, and Barge-In'
+    'chromium: optional JS rendering (--js) in the isolated browser'
+)
+source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/capri-${pkgver}"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "${srcdir}/capri-${pkgver}"
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+
+    # Desktop launcher
+    install -Dm644 capri/assets/capri-cyberdeck.desktop \
+        "${pkgdir}/usr/share/applications/capri-cyberdeck.desktop"
+
+    # Systemd user service (opt-in via: systemctl --user enable --now capri-avatar.service)
+    install -Dm644 /dev/stdin "${pkgdir}/usr/lib/systemd/user/capri-avatar.service" <<'EOF'
+[Unit]
+Description=Capri AI Companion Wayland Desktop Avatar
+Documentation=https://github.com/clearbranch0123/capri
+PartOf=graphical-session.target
+After=graphical-session.target pipewire.service pipewire-pulse.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+Environment=QT_QPA_PLATFORM=wayland
+ExecStart=/usr/bin/capri-avatar --mode 2d --systemd
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+
+    # Code license (MIT) and upstream noncommercial asset notices (PolyForm 1.0.0)
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 ASSETS_NOTICE.md "${pkgdir}/usr/share/licenses/${pkgname}/ASSETS_NOTICE.md"
+    install -Dm644 config.example.yaml "${pkgdir}/usr/share/${pkgname}/config.example.yaml"
+}

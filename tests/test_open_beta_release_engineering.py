@@ -239,6 +239,7 @@ def test_open_beta_governance_and_github_files_present():
         ROOT_DIR / "SECURITY.md",
         ROOT_DIR / "README.md",
         ROOT_DIR / "README.ru.md",
+        ROOT_DIR / "docs" / "ARCHITECTURE.md",
         ROOT_DIR / "docs" / "screenshots" / "capri-demo.webp",
         ROOT_DIR / "docs" / "screenshots" / "cyberdeck.png",
         ROOT_DIR / "docs" / "screenshots" / "relic.png",
@@ -266,3 +267,21 @@ def test_open_beta_governance_and_github_files_present():
     assert "README.ru.md" in readme_en
     assert "not affiliated with" in readme_en.lower()
     assert "CD PROJEKT RED" in readme_en
+    assert "docs/ARCHITECTURE.md" in readme_en
+
+
+def test_pyproject_modular_optional_extras_structure():
+    import tomllib
+
+    data = tomllib.loads((ROOT_DIR / "pyproject.toml").read_text(encoding="utf-8"))
+    core_deps = "\n".join(data["project"]["dependencies"]).lower()
+    for heavy_opt in ("faster-whisper", "vosk", "fish-audio-sdk", "elevenlabs", "edge-tts", "google-genai", "sounddevice"):
+        assert heavy_opt not in core_deps, f"Heavy optional dependency {heavy_opt} should live under optional-dependencies"
+
+    extras = data["project"]["optional-dependencies"]
+    for group in ("voice", "local-stt", "vision", "web", "all", "test"):
+        assert group in extras and extras[group], f"Missing optional dependency group: {group}"
+    assert any("vosk" in d for d in extras["local-stt"])
+    assert any("faster-whisper" in d for d in extras["local-stt"])
+    assert any("edge-tts" in d for d in extras["voice"])
+    assert any("google-genai" in d for d in extras["vision"])

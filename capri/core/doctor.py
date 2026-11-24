@@ -139,8 +139,9 @@ def detect_linux_distro() -> tuple[str, str, bool]:
         except Exception:
             pass
     supported = d_id in ("arch", "cachyos", "fedora")
-    if not supported and any(tok in id_like.split() for tok in ("arch", "fedora")):
-        supported = d_id in ("arch", "cachyos", "fedora")
+    if not supported and d_id in ("endeavouros", "manjaro", "garuda") and "arch" in id_like.split():
+        d_id = "arch"
+        supported = True
     return d_id, pretty, supported
 
 
@@ -235,6 +236,38 @@ def _check_wm_rules() -> DiagnosticItem:
     )
 
 
+def _check_vision_and_clipboard() -> DiagnosticItem:
+    wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+    if not wayland:
+        return DiagnosticItem("Wayland Vision / Буфер", "OK", "Wayland-сессия не активна — проверка grim/slurp пропущена")
+    missing = [tool for tool in ("grim", "slurp", "wl-paste") if not shutil.which(tool)]
+    if not missing:
+        return DiagnosticItem("Wayland Vision / Буфер", "OK", "Доступны `grim`, `slurp`, `wl-paste` (/look, 👁 Область, Ctrl+V)")
+    d_id, _, _ = detect_linux_distro()
+    hint = _distro_install_hint(d_id, "grim slurp wl-clipboard", "grim slurp wl-clipboard")
+    return DiagnosticItem(
+        "Wayland Vision / Буфер",
+        "WARN",
+        f"Не найдены: {', '.join(missing)} — установи для скриншотов и Ctrl+V ({hint})",
+    )
+
+
+def _check_systemd_avatar_service() -> DiagnosticItem:
+    from .systemd_service import get_avatar_service_status
+
+    st = get_avatar_service_status()
+    if not st.systemd_available:
+        return DiagnosticItem("Systemd-сервис аватара", "OK", st.detail)
+    if st.installed and st.wayland_in_systemd_env is False:
+        return DiagnosticItem(
+            "Systemd-сервис аватара",
+            "WARN",
+            f"{st.detail} — `WAYLAND_DISPLAY` не импортирован в systemd --user "
+            "(выполни `systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP`)",
+        )
+    return DiagnosticItem("Systemd-сервис аватара", "OK", st.detail)
+
+
 def _check_mcp(config: AppConfig) -> DiagnosticItem:
     mcp_cfg = getattr(config, "mcp", None)
     if not mcp_cfg or not getattr(mcp_cfg, "enabled", False):
@@ -254,6 +287,8 @@ def run_diagnostics(config: AppConfig, sessions_db_path: Optional[Path] = None) 
         _check_storage_and_sqlite(sessions_db_path=sessions_db_path),
         _check_display_and_niri(),
         _check_wm_rules(),
+        _check_vision_and_clipboard(),
+        _check_systemd_avatar_service(),
         _check_audio_playback(),
         _check_pipewire_aec(config),
         _check_mcp(config),

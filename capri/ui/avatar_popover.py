@@ -205,6 +205,11 @@ def _popover_qss() -> str:
             color: {P.coral_hover};
             border-color: {P.crimson_border};
         }}
+        QLabel[role="pillState"][state="lilac"] {{
+            background-color: rgba(181, 155, 255, 0.16);
+            color: {P.lilac};
+            border-color: rgba(181, 155, 255, 0.42);
+        }}
         QPushButton#popoverAskBtn {{
             background-color: {P.crimson_soft};
             color: {P.text_primary};
@@ -284,6 +289,7 @@ class CapriAvatarQuickPopover(QWidget):
     follow_toggled = Signal()
     auto_poses_toggled = Signal()
     game_mode_cycled = Signal()
+    focus_timer_cycled = Signal()
     monitor_cycle_requested = Signal()
     home_requested = Signal()
     pin_toggled = Signal()
@@ -381,6 +387,14 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_autonomous = _SwitchRowButton(tr_ui("Свободная жизнь", "Autonomous life", lang=lang), self.card)
         self.row_follow = _SwitchRowButton(tr_ui("Следовать за окном", "Follow active window", lang=lang), self.card)
         self.row_auto_poses = _SwitchRowButton(tr_ui("Авто-позы (музыка / сон)", "Auto-poses (music / sleep)", lang=lang), self.card)
+        self.row_focus_timer = _SwitchRowButton(tr_ui("Фокус-таймер (Pomodoro)", "Focus Timer (Pomodoro)", lang=lang), self.card)
+        self.row_focus_timer.setToolTip(
+            tr_ui(
+                "Цикл по клику: 25м → 50м → 15м → OFF (мягкая аура фокуса и авто-тишина)",
+                "Click to cycle: 25m → 50m → 15m → OFF (soft focus aura & auto-silence)",
+                lang=lang,
+            )
+        )
         self.row_game_mode = _SwitchRowButton("Game Mode", self.card)
         self.row_monitor = _SwitchRowButton(tr_ui("Монитор", "Monitor", lang=lang), self.card)
         self.row_monitor.setVisible(False)
@@ -389,6 +403,7 @@ class CapriAvatarQuickPopover(QWidget):
             self.row_autonomous,
             self.row_follow,
             self.row_auto_poses,
+            self.row_focus_timer,
             self.row_game_mode,
             self.row_monitor,
         ):
@@ -451,6 +466,7 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_autonomous.clicked.connect(self.autonomous_toggled.emit)
         self.row_follow.clicked.connect(self.follow_toggled.emit)
         self.row_auto_poses.clicked.connect(self.auto_poses_toggled.emit)
+        self.row_focus_timer.clicked.connect(self.focus_timer_cycled.emit)
         self.row_game_mode.clicked.connect(self.game_mode_cycled.emit)
         self.row_monitor.clicked.connect(self.monitor_cycle_requested.emit)
         self.btn_home.clicked.connect(lambda: (self.hide(), self.home_requested.emit()))
@@ -477,6 +493,7 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_autonomous.lbl_title.setText(tr_ui("Свободная жизнь", "Autonomous life", lang=norm))
         self.row_follow.lbl_title.setText(tr_ui("Следовать за окном", "Follow active window", lang=norm))
         self.row_auto_poses.lbl_title.setText(tr_ui("Авто-позы (музыка / сон)", "Auto-poses (music / sleep)", lang=norm))
+        self.row_focus_timer.lbl_title.setText(tr_ui("Фокус-таймер (Pomodoro)", "Focus Timer (Pomodoro)", lang=norm))
         self.row_monitor.lbl_title.setText(tr_ui("Монитор", "Monitor", lang=norm))
         self.btn_quick_ask.setText(tr_ui("⚡ Быстрый вопрос", "⚡ Quick Ask", lang=norm))
         voice_busy = self.btn_voice.property("active") == "true"
@@ -504,6 +521,8 @@ class CapriAvatarQuickPopover(QWidget):
         avatar_state: str = "idle",
         available_monitors: Optional[list[str]] = None,
         active_monitor: str = "",
+        focus_timer_label: str = "OFF",
+        focus_timer_active: bool = False,
     ) -> None:
         st_norm = (avatar_state or "idle").strip().lower()
         if st_norm == "listening":
@@ -512,6 +531,8 @@ class CapriAvatarQuickPopover(QWidget):
             self.lbl_state.setText("VOICE")
         elif power_saver_active:
             self.lbl_state.setText("GAME")
+        elif focus_timer_active:
+            self.lbl_state.setText(f"FOCUS {focus_timer_label}")
         elif pinned:
             self.lbl_state.setText("PINNED")
         elif perched:
@@ -544,6 +565,10 @@ class CapriAvatarQuickPopover(QWidget):
         self.row_autonomous.set_pill("ON" if autonomous_enabled else "OFF", "on" if autonomous_enabled else "off")
         self.row_follow.set_pill("ON" if follow_enabled else "OFF", "on" if follow_enabled else "off")
         self.row_auto_poses.set_pill("ON" if auto_poses_enabled else "OFF", "on" if auto_poses_enabled else "off")
+        if focus_timer_active:
+            self.row_focus_timer.set_pill(focus_timer_label or "ON", "lilac")
+        else:
+            self.row_focus_timer.set_pill("OFF", "off")
 
         if game_mode_override is True:
             self.row_game_mode.set_pill("FORCE", "crimson")

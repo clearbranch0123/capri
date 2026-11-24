@@ -1005,10 +1005,59 @@ def cli_main(argv=None):
             print("\n" + res.snippet)
             print("Чтобы применить с автоматическим бэкапом, запусти: capri --wm-rules --apply")
         return 0
+    if any(a in ("--watch", "watch") for a in args):
+        from capri.core.watch_runner import parse_watch_cli_args, run_watched_command
+
+        cmd_tokens, use_shell, no_voice, no_notify = parse_watch_cli_args(args)
+        if not cmd_tokens:
+            print("Usage: capri --watch [--no-voice] [--no-notify] \"<command>\"  (or: capri --watch -- <cmd> <args...>)")
+            return 2
+        res = run_watched_command(
+            cmd_tokens,
+            use_shell=use_shell,
+            no_voice=no_voice,
+            no_notify=no_notify,
+        )
+        return res.returncode
+    if any(a in ("--service", "service") for a in args):
+        from capri.core.systemd_service import (
+            get_avatar_service_status,
+            install_avatar_service,
+            uninstall_avatar_service,
+        )
+
+        sub = "status"
+        for idx, tok in enumerate(args):
+            if tok in ("--service", "service") and idx + 1 < len(args) and not args[idx + 1].startswith("-"):
+                sub = args[idx + 1].strip().lower()
+                break
+        if sub in ("install", "enable", "apply"):
+            res = install_avatar_service(
+                enable="--no-enable" not in args,
+                start="--start" in args or "--now" in args,
+                dry_run="--dry-run" in args,
+            )
+            print(res.message)
+            if "--dry-run" in args:
+                print("\n" + res.unit_content)
+            if res.wayland_env_warning:
+                print(f"⚠ {res.wayland_env_warning}")
+            return 0 if res.ok else 1
+        if sub in ("uninstall", "remove", "disable"):
+            res = uninstall_avatar_service()
+            print(res.message)
+            return 0 if res.ok else 1
+        st = get_avatar_service_status()
+        print(st.detail)
+        if st.installed and st.wayland_in_systemd_env is False:
+            print("⚠ WAYLAND_DISPLAY отсутствует в systemd --user: systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP")
+        return 0
     if any(a in ("--help", "-h") for a in args):
         print(
             f"Capri AI Companion v{__version__} ({__codename__})\n"
-            "Usage: capri [--version] [--doctor] [--bugreport] [--wm-rules [niri|hyprland] [--apply]] [--help]"
+            "Usage: capri [--version] [--doctor] [--bugreport] [--watch [--no-voice] \"<cmd>\"] "
+            "[--service [status|install|uninstall] [--dry-run] [--start]] "
+            "[--wm-rules [niri|hyprland] [--apply]] [--help]"
         )
         return 0
     asyncio.run(main())

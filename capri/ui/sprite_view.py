@@ -131,6 +131,12 @@ class AvatarV2Canvas(QWidget):
         self.physics_impact_ripple: float = 0.0
         self.physics_vx: float = 0.0
         self.physics_vy: float = 0.0
+        self.focus_active: bool = False
+        self.focus_progress: float = 0.0
+
+    def set_focus_visual(self, active: bool, progress: float = 0.0) -> None:
+        self.focus_active = bool(active)
+        self.focus_progress = max(0.0, min(1.0, float(progress)))
 
     def _load_pose_manifest(self) -> dict[str, dict]:
         """Load optional `poses.json` manifest (user override dir first, then bundled sprites_v2)."""
@@ -537,7 +543,7 @@ class AvatarV2Canvas(QWidget):
         char_y = max(48.0, base_char_y + hover_y + (0.0 if self.reduced_motion else self.physics_offset_y))
 
         # 1. Голографическая аура в перспективе (точно под стопами, без обрезки по краям холста!)
-        glow_col = self._active_aura_color(state)
+        glow_col = QColor(181, 155, 255, 96) if (self.focus_active and state == "idle") else self._active_aura_color(state)
         audio_e = 0.0 if self.reduced_motion else max(0.0, min(1.0, self.audio_energy))
         # В idle.png стопы смещены вправо от центра ячейки (+18px), выравниваем центр проекции точно под каблуки
         foot_dx = 18.0 if (self.pose == "normal" and not self.dance_active) else 0.0
@@ -560,6 +566,24 @@ class AvatarV2Canvas(QWidget):
         painter.setBrush(QBrush(grad))
         painter.drawEllipse(QPointF(0.0, 0.0), aura_rx, aura_rx)
         painter.restore()
+
+        # 1a-focus. Мягкое голографическое кольцо прогресса Фокус-таймера (Pomodoro) под пятками Капри
+        if self.focus_active:
+            painter.save()
+            rem_frac = max(0.02, min(1.0, 1.0 - self.focus_progress))
+            ring_rx = 34.0
+            ring_ry = 8.0
+            ring_rect = QRectF(cx - ring_rx, aura_cy - ring_ry, ring_rx * 2.0, ring_ry * 2.0)
+            # Subtle base track
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(181, 155, 255, 42), 1.4))
+            painter.drawEllipse(ring_rect)
+            # Crisp remaining-time arc (sweeps clockwise from 12 o'clock = 90*16)
+            span_16 = -int(round(360.0 * 16.0 * rem_frac))
+            arc_alpha = 165 if self.reduced_motion else int(145 + 40 * abs(math.sin(self.hover_phase * 0.7)))
+            painter.setPen(QPen(QColor(181, 155, 255, arc_alpha), 2.1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(ring_rect, 90 * 16, span_16)
+            painter.restore()
 
         # 1a. Тонкая голографическая голосовая пульсация (концентрические кольца проекции + мягкие искры)
         if not self.reduced_motion and state in ("speaking", "listening") and audio_e > 0.02:

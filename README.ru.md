@@ -1,9 +1,10 @@
-# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.5 — Quick Ask Bar & Memory/Context 2.0)
+# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.6 — Voice 3.0, Focus Companion и Arch-экосистема)
 
 🇬🇧 **[English](README.md)** · 🇷🇺 **Русский**
 
-[![Version](https://img.shields.io/badge/version-v3.5.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.5.0)
-[![Tests](https://img.shields.io/badge/Tests-268%2F268%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Version](https://img.shields.io/badge/version-v3.6.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.0)
+[![Tests](https://img.shields.io/badge/Tests-289%2F289%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
@@ -11,7 +12,7 @@
 
 > **Неофициальный фан-проект и лицензия:** Capri Linux — независимый некоммерческий open-source фан-проект; он **не связан с CD PROJEKT RED, Studio Trigger или Netflix** и не является их официальным продуктом. Лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
-Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*), плавающей мини-строкой быстрого вопроса **Quick Ask Bar** (`capri-deck --ask`), гибридной памятью и кросс-сессионным поиском **Memory & Context 2.0** (`v3.5`), живым физическим Wayland-аватаром (*Living Physics & Spatial 2.0*), аудио-реактивной голограммой **Voice 2.0**, контекстным присутствием **Living Awareness** и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачных API выбранному вами провайдеру передаются только данные конкретного сервиса: для LLM — системный промпт, активный контекст диалога и подтверждённые факты памяти; для STT — аудиофрагмент речи; для TTS — текст ответа для озвучивания; для Vision — скриншот или прикреплённое изображение. Для локальной обработки чата и речи поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS (при этом опциональные сетевые функции — веб-поиск, изолированный браузер и внешние MCP-серверы — управляются отдельно через конфиг и политику инструментов).
+Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*), потоковым **Voice 3.0**, инструментами **Dev & Focus Companion** (`capri --watch`, `/pomodoro`), нативной интеграцией **Arch / CachyOS** (`PKGBUILD` и `systemd --user`), плавающей мини-строкой **Quick Ask Bar** (`capri-deck --ask`), гибридной памятью **Memory & Context 2.0**, 1-клик переключением языка **RU / EN**, живым физическим Wayland-аватаром (*Living Physics & Spatial 2.0*) и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачных API выбранному вами провайдеру передаются только данные конкретного сервиса: для LLM — системный промпт, активный контекст диалога и подтверждённые факты памяти; для STT — аудиофрагмент речи; для TTS — текст ответа для озвучивания; для Vision — скриншот или прикреплённое изображение. Для локальной обработки чата и речи поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS (при этом опциональные сетевые функции — веб-поиск, изолированный браузер и внешние MCP-серверы со строгой изоляцией окружения — управляются отдельно через конфиг и политику инструментов).
 
 Включает графический интерфейс **Cyberdeck** (PySide6 / Qt 6), **Relic Construct Dashboard**, плавающую мини-строку **Quick Ask Bar** (закрепление `📌` с автоматическим следованием по воркспейсам Niri/Hyprland, вставка скриншотов `Ctrl+V`, захват области `👁`, голос `🎙`, стриминг ответа и разворот `↗ В Cyberdeck`), живой Wayland desktop-аватар на нативном click-through слое `zwlr_layer_shell_v1` (2D-физика перетаскивания и бросков 60/125 FPS, магнитная посадка на верхние грани окон, мультимониторное переключение с hotplug-восстановлением и перелётом через стыки экранов, аудио-реактивная голографическая проекция, автономная жизнь, тихие микро-реакции Living Awareness, drop-in слоты пользовательских спрайтов в `~/.config/capri/sprites/` и карточка быстрого управления по ПКМ), токенный стриминг, скриншоты по `Ctrl+V` и Drag & Drop, централизованную политику безопасности инструментов (`SAFE / ASK / TRUSTED`), управляемую память через кандидатов с фильтрацией секретов, BM25 + RU↔EN поиском, экономичным сжатием длинных сессий и кросс-сессионным `/recall`, изолированный браузер («Her Own Browser»), клиент **MCP (stdio JSON-RPC 2.0)**, виртуальный микрофон PipeWire (**Join Voice**), эмоциональный движок и синтетический харнесс оценки характера (`scripts/eval_persona.py`).
 
@@ -51,9 +52,11 @@
 ### 1. Чистая установка
 ```bash
 git clone https://github.com/clearbranch0123/capri.git && cd capri
-./setup.sh
+./setup.sh              # Полная установка (ядро + voice, local-stt, vision, web)
+# Или облегчённая установка только ядра:
+./setup.sh --minimal    # Базовый GUI/CLI/LLM/MCP без тяжёлых голосовых/STT-пакетов
 ```
-Скрипт создаст `.venv`, установит пакет `capri` (`capri`, `capri-deck`, `capri-avatar`), развернёт чистые шаблоны `$XDG_CONFIG_HOME/capri/.env` (`0600`) и `config.yaml` (по умолчанию в `~/.config/capri/`) и установит `.desktop`-файл.
+Скрипт создаст `.venv`, установит пакет `capri` (`capri`, `capri-deck`, `capri-avatar`), развернёт чистые шаблоны `$XDG_CONFIG_HOME/capri/.env` (`0600`) и `config.yaml` (по умолчанию в `~/.config/capri/`) и установит `.desktop`-файл. При установке через `pip` доступны модульные группы: `pip install .`, `pip install ".[voice]"`, `pip install ".[local-stt]"`, `pip install ".[vision]"`, `pip install ".[web]"` или `pip install ".[all]"`. Подробная карта модулей, IPC и модель безопасности описаны в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### 2. Настройка API-ключей и передача данных
 Ключи хранятся **только локально** в `~/.config/capri/.env` (права `0600`) и никогда не записываются в `config.yaml`.
@@ -79,7 +82,7 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./run.sh --gui         # Cyberdeck GUI
 ./run.sh --doctor      # Самодиагностика окружения
 ./run.sh --bugreport   # Безопасный баг-репорт (без ключей и переписки)
-./run.sh --test        # Полный прогон автотестов (v3.5.0: 265/265 passed, 0 warnings)
+./run.sh --test        # Полный прогон автотестов (0 warnings)
 ./.venv/bin/python scripts/eval_persona.py --mock --providers deepseek,gemini  # Синтетический тест характера (оффлайн)
 ```
 
@@ -124,10 +127,10 @@ Quick Ask доступен напрямую из UI (`⚡` в шапке Cyberde
 ## ⌨️ Основные слэш-команды и горячие клавиши
 
 - **Горячие клавиши:** `Enter` (отправить), `Shift+Enter` (новая строка), `Ctrl+N` (новый чат), `Ctrl+K` (поиск диалогов), `Ctrl+V` (скриншот/текст), `Ctrl+M` (голос), `Esc` (стоп / закрыть drawer), `F2` / `Del` (переименовать / удалить сессию).
-- **Диагностика и резервные копии:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/profile export`, `/profile restore <zip>`.
-- **Память и контекст:** `/new`, `/sessions`, `/recall <запрос>` *(единый поиск по памяти и прошлым сессиям)*, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
-- **Интеграции v3.x:** `/mcp [status|connect|disconnect|tools]` *(асинхронное неблокирующее подключение)*, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
-- **Живой аватар и Quick Ask (`v3.5`):** **ЛКМ** — перетаскивание и баллистический бросок по экрану (с посадкой на верхние грани окон и бесшовным перелётом через стыки соседних мониторов); **Shift + отпускание ЛКМ** — закрепить в воздухе; **ПКМ** — карточка быстрого управления **Crimson Graphite** (`⚡ Быстрый вопрос`, позы, физика, автономная жизнь, переключение мониторов `DP-1 / HDMI-A-1`, `🎙 Голос`, `👁 Область`, `◈ Релик`, выключение аватара); плавающий **Quick Ask Bar** с кнопкой `📌` автоматически следует за вами по всем рабочим столам Niri/Hyprland без перехвата фокуса; свои спрайты (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, опциональный `poses.json`) можно положить в `~/.config/capri/sprites/`.
+- **Диагностика, язык и сервис:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/lang [ru|en]`, `/service [status|install|uninstall]`, `/profile export`, `/profile restore <zip>`, `capri --watch "<cmd>"`.
+- **Память, фокус и контекст:** `/new`, `/sessions`, `/recall <запрос>` *(единый поиск по памяти и прошлым сессиям)*, `/pomodoro [25|50|15|off]` *(фокус-таймер + режим тишины)*, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
+- **Интеграции v3.x:** `/mcp [status|connect|disconnect|tools]` *(асинхронное неблокирующее подключение со строгой изоляцией окружения)*, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
+- **Живой аватар и Quick Ask (`v3.5–v3.6`):** **ЛКМ** — перетаскивание и баллистический бросок по экрану (с посадкой на верхние грани окон и бесшовным перелётом через стыки соседних мониторов); **Shift + отпускание ЛКМ** — закрепить в воздухе; **ПКМ** — карточка быстрого управления **Crimson Graphite** (`⚡ Быстрый вопрос`, `⏱ Фокус`, позы, физика, автономная жизнь, переключение мониторов `DP-1 / HDMI-A-1`, `🎙 Голос`, `👁 Область`, `◈ Релик`, выключение аватара); плавающий **Quick Ask Bar** с кнопкой `📌` автоматически следует за вами по всем рабочим столам Niri/Hyprland без перехвата фокуса; свои спрайты (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, опциональный `poses.json`) можно положить в `~/.config/capri/sprites/`.
 
 ---
 

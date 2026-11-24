@@ -5,6 +5,34 @@
 
 ---
 
+## [3.6.0] — 2026-11-24 (Voice 3.0, Focus & Watch Companion, Arch Ecosystem & Hardened MCP)
+
+Крупное обновление скорости голоса, повседневных инструментов разработчика, нативной интеграции с Arch / CachyOS, двуязычного интерфейса и безопасности окружения **Capri AI Companion**.
+
+### 🎙️ Voice 3.0 — Сверхбыстрый потоковый TTS и реальная PCM-аура
+- **Eager first-clause split и разбиение длинных фраз (`capri/voice/tts.py`):** `SentenceStreamSplitter` теперь отсекает первую осмысленную клаузу сразу по знакам паузы (от 28 символов) и мягко режет длинные предложения (>110 символов), сокращая задержку первого слова (TTFA).
+- **Истинное скользящее окно предзагрузки (`StreamingTTSSession`):** слоты предсинтеза удерживаются до завершения воспроизведения активного чанка (`active + buffered <= max_prefetch`, по умолчанию `3`), предотвращая бесконтрольное накопление аудиофайлов, с мгновенной очисткой опоздавших temp-файлов при прерывании/barge-in.
+- **Сериализация и переиспользование соединений:** добавлены `asyncio.Lock` в `SileroDaemonClient` / `XTTSDaemonClient` и кэш клиента `AsyncFishAudio` по `(api_key, loop_id)`.
+- **Реальный PCM-анализ 8/16/24/32-bit WAV и 25 Гц диспетчер ауры:** `_decode_wav_mono_float32()` декодирует PCM WAV (включая signed 24-bit LE), опциональный PyAV и MP3-фоллбэк, передавая плавную кривую речи на аватар через неблокирующий `_AsyncTTSAudioLevelDispatcher` с межчанковым полом ауры `0.14`.
+
+### 🛠️ Dev & Focus Companion (`capri --watch` + Focus / Pomodoro Timer)
+- **Наблюдатель долгих команд (`capri/core/watch_runner.py`, `capri/cli.py`):** `capri --watch [--no-voice] [--no-notify] "<cmd>"` (или `-- <argv...>`) запускает сборку/тесты с полным TTY-пробросом, точным кодом выхода (включая POSIX `127` и чистый `SIGINT`), оповещением на аватар, системным уведомлением и голосовой озвучкой финала.
+- **Фокус-таймер / Помодоро (`capri/core/focus_timer.py`, `capri/ui/sprite_view.py`, `capri/ui/overlay.py`, `capri/ui/cyberdeck.py`):** циклы `25 / 50 / 15 мин` доступны по `/pomodoro [25|50|15|off]` и из карточки аватара; под аватаром рисуется сиреневое голографическое кольцо прогресса, а автоматические ворота тишины (`focus_gate`) на время фокуса приглушают проактивную инициативу и бродячие прогулки. Добавлен неблокирующий ретрай IPC при холодном старте аватара.
+
+### 📦 Экосистема Arch / CachyOS, `systemd --user` и модульные зависимости
+- **Опциональный `systemd --user` сервис (`capri/core/systemd_service.py`, `capri/ui/overlay.py`, `capri/cli.py`):** `capri --service [status|install|uninstall] [--dry-run] [--start]` и `/service` управляют `capri-avatar.service` (`PartOf=graphical-session.target`, `Restart=on-failure`, `--systemd` с проверкой живого Wayland-сокета и автопереподключением при перезапуске композитора). Статус видит как пользовательские, так и системные пакетные юниты `/usr/lib/systemd/user`, а ошибки `systemctl` честно возвращают код выхода `1`.
+- **Готовый `packaging/arch/PKGBUILD`:** собирает пакет `capri-companion` исключительно на официальных зависимостях Arch/CachyOS, с `.desktop`-ярлыком, двойными лицензионными файлами (`MIT` + `ASSETS_NOTICE.md`) и системным юнитом `/usr/lib/systemd/user/capri-avatar.service`. Опциональные голосовые импорты (`vosk`, `evdev`, `edge_tts`) защищены от `ModuleNotFoundError`.
+- **Модульные extras в `pyproject.toml` и `setup.sh --minimal`:** ядро вынесено в лёгкий базовый набор, а тяжёлые зависимости сгруппированы в `capri[voice]`, `capri[local-stt]`, `capri[vision]`, `capri[web]` и `capri[all]`.
+- **Расширенный `/doctor` (`capri/core/doctor.py`):** добавлены проверки Wayland Vision/буфера (`grim`/`slurp`/`wl-paste`) и статуса `systemd`-сервиса аватара с точными подсказками для Arch / CachyOS / EndeavourOS / Manjaro / Garuda / Fedora.
+
+### 🌐 Двуязычный интерфейс RU / EN, безопасность MCP и документация
+- **Быстрый переключатель языка RU / EN (`capri/ui/i18n.py`, `capri/ui/cyberdeck.py`, `capri/ui/quick_ask.py`, `capri/ui/overlay.py`):** кнопка `RU`/`EN` в нижнем доке Cyberdeck, выбор в настройках и мастере `/setup`, команда `/lang [ru|en]`, живая синхронизация `config_sync` при холодном старте и корректное склонение счётчиков.
+- **Строгая изоляция окружения MCP (`capri/core/mcp_client.py`):** сторонние MCP-серверы больше не наследуют полный `os.environ` — передаётся только allowlist безопасных системных переменных (с блокировкой прокси-URL с встроенными учётными данными `user:pass@`) плюс явно заданные в `mcp.servers[*].env` переменные.
+- **Архитектурная документация:** добавлен [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) с картой модулей, IPC-границами и моделью безопасности.
+- **Верификация релиза v3.6.0:** **289/289 passed, 0 warnings** (`test_voice_streaming_v36.py`, `test_watch_and_focus_v36.py`, `test_arch_ecosystem_v36.py`, `test_ui_i18n.py`, `test_open_beta_security_and_mcp_async.py` + весь базовый набор).
+
+---
+
 ## [3.5.0] — 2026-11-23 (Quick Ask Bar & Memory/Context 2.0)
 
 Крупное обновление повседневного удобства под Wayland (Niri / Hyprland) и глубины контекстной памяти **Capri AI Companion**: плавающая мини-строка **Quick Ask Bar** со следованием по рабочим столам и **Memory & Context 2.0** (BM25 + RU↔EN поиск, реальное сжатие длинных сессий, кросс-сессионный recall и строгая редакция секретов).
