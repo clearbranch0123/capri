@@ -83,7 +83,9 @@ from ..core.config import (
     AppConfig,
     delete_env_value,
     get_user_config_dir,
+    is_local_llm_endpoint,
     load_config,
+    provider_env_key_name,
     save_config,
     update_env_value,
 )
@@ -995,14 +997,16 @@ def check_api_key_sync(
 
     key = (api_key or "").strip()
     svc = (service or "").strip().lower()
-    if not key:
+    is_local_llm = svc == "llm" and is_local_llm_endpoint("", base_url)
+    if not key and not is_local_llm:
         return False, "Ключ не введён"
 
     headers: dict[str, str] = {"User-Agent": f"Capri/{__version__}"}
     if svc == "llm":
         root = (base_url or "https://api.groq.com/openai/v1").strip().rstrip("/")
         url = f"{root}/models"
-        headers["Authorization"] = f"Bearer {key}"
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
     elif svc == "fish":
         url = "https://api.fish.audio/model?page_size=1"
         headers["Authorization"] = f"Bearer {key}"
@@ -1018,6 +1022,8 @@ def check_api_key_sync(
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             resp = client.get(url, headers=headers)
         if resp.status_code == 200:
+            if is_local_llm and not key:
+                return True, "Локальный сервер доступен (HTTP 200)"
             return True, "Ключ валиден (HTTP 200)"
         if resp.status_code in (401, 403):
             return False, f"Отклонён сервисом (HTTP {resp.status_code} — проверь ключ)"
@@ -1554,14 +1560,16 @@ class CapriFirstRunWizard(QDialog):
         layout.addWidget(lbl_prov)
         self.combo_provider = QComboBox()
         self.combo_provider.setMinimumHeight(36)
-        self._provider_ids = ["deepseek", "groq", "gemini", "sambanova", "openrouter", "openai"]
+        self._provider_ids = ["deepseek", "groq", "gemini", "sambanova", "openrouter", "openai", "ollama", "lmstudio"]
         labels = {
-            "deepseek": "DeepSeek (V3 / R1)",
+            "deepseek": "DeepSeek (Официальный API)",
             "groq": "Groq (Быстрый inference)",
             "gemini": "Google Gemini",
             "sambanova": "SambaNova Cloud",
             "openrouter": "OpenRouter",
             "openai": "OpenAI",
+            "ollama": "Ollama (Локальный — без API-ключа)",
+            "lmstudio": "LM Studio (Локальный — без API-ключа)",
         }
         cur_p = (self.config.llm.provider or "deepseek").lower()
         for pid in self._provider_ids:
@@ -2049,13 +2057,16 @@ class CapriProviderSettingsDialog(QDialog):
 
         self.combo_provider = QComboBox()
         self.combo_provider.setMinimumHeight(36)
+        ui_lang = resolve_ui_lang(self.config)
         self.providers_map = {
-            "DeepSeek (Официальный API / V3 & R1)": "deepseek",
-            "Groq (Сверхбыстрый / Рекомендуется)": "groq",
-            "SambaNova (Llama 3.3 70B / gpt-oss-120b)": "sambanova",
-            "Google Gemini (Flash / Pro)": "gemini",
-            "OpenRouter (DeepSeek / Claude / GPT)": "openrouter",
-            "OpenAI (Официальный API)": "openai",
+            tr_ui("DeepSeek (Официальный API)", "DeepSeek (Official API)", lang=ui_lang): "deepseek",
+            tr_ui("Groq (Сверхбыстрый / Рекомендуется)", "Groq (Ultra-fast / Recommended)", lang=ui_lang): "groq",
+            tr_ui("SambaNova (Llama 3.3 70B / gpt-oss-120b)", "SambaNova (Llama 3.3 70B / gpt-oss-120b)", lang=ui_lang): "sambanova",
+            tr_ui("Google Gemini (Flash / Pro)", "Google Gemini (Flash / Pro)", lang=ui_lang): "gemini",
+            tr_ui("OpenRouter (DeepSeek / Claude / GPT)", "OpenRouter (DeepSeek / Claude / GPT)", lang=ui_lang): "openrouter",
+            tr_ui("OpenAI (Официальный API)", "OpenAI (Official API)", lang=ui_lang): "openai",
+            tr_ui("Ollama (Локальный — без ключа)", "Ollama (Local — no API key)", lang=ui_lang): "ollama",
+            tr_ui("LM Studio (Локальный — без ключа)", "LM Studio (Local — no API key)", lang=ui_lang): "lmstudio",
         }
         for label in self.providers_map:
             self.combo_provider.addItem(label)
@@ -2534,7 +2545,7 @@ class CapriProviderSettingsDialog(QDialog):
             self.combo_vision_model.setCurrentText(cur_vm)
         vision_layout.addWidget(self.combo_vision_model)
 
-        vision_layout.addWidget(_field_label("Gemini API-ключ (GEMINI_API_KEY — для просмотра экрана и Gemini TTS)"))
+        vision_layout.addWidget(_field_label("Gemini API-ключ (GEMINI_API_KEY — для просмотра экрана и чата Gemini)"))
         gem_key_val = (
             getattr(self.config.vision, "gemini_api_key", "")
             or getattr(self.config.voice, "gemini_api_key", "")
@@ -2557,7 +2568,7 @@ class CapriProviderSettingsDialog(QDialog):
         self.btn_check_gemini_key.clicked.connect(self._on_check_gemini_key)
         gem_chk_row.addWidget(self.btn_check_gemini_key)
 
-        self.lbl_gemini_check_status = QLabel("Используется для /look, скриншотов Ctrl+V и Gemini TTS")
+        self.lbl_gemini_check_status = QLabel("Используется для /look и анализа скриншотов (Ctrl+V / Область)")
         self.lbl_gemini_check_status.setWordWrap(True)
         self.lbl_gemini_check_status.setStyleSheet(
             f"color: {COLORS.text_muted}; font-family: {TYPE.mono}; font-size: 11px; border: none;"
@@ -2707,14 +2718,15 @@ class CapriProviderSettingsDialog(QDialog):
         prev = self._key_check_workers.get(service)
         if prev is not None and prev.isRunning():
             return
-        if not (api_key or "").strip():
+        allow_keyless_local = service == "llm" and is_local_llm_endpoint(self._get_selected_provider_id(), base_url)
+        if not (api_key or "").strip() and not allow_keyless_local:
             status_lbl.setText("✕ Сначала введи API-ключ")
             status_lbl.setStyleSheet(
                 f"color: {COLORS.coral}; font-family: {TYPE.mono}; font-size: 11px; border: none;"
             )
             return
         btn.setEnabled(False)
-        status_lbl.setText("⏳ Проверка ключа...")
+        status_lbl.setText("⏳ Проверка сервера..." if allow_keyless_local and not (api_key or "").strip() else "⏳ Проверка ключа...")
         status_lbl.setStyleSheet(
             f"color: {COLORS.amber}; font-family: {TYPE.mono}; font-size: 11px; border: none;"
         )
@@ -2814,6 +2826,8 @@ class CapriProviderSettingsDialog(QDialog):
             "gemini": ["gemini-2.5-flash", "gemini-2.5-pro"],
             "openrouter": ["deepseek/deepseek-chat", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"],
             "openai": ["gpt-4o-mini", "gpt-4o"],
+            "ollama": ["llama3.2", "qwen2.5:7b", "deepseek-r1:8b", "mistral"],
+            "lmstudio": ["local-model"],
         }
         models = models_by_provider.get(provider_id, ["openai/gpt-oss-120b"])
         for m in models:
@@ -3996,9 +4010,10 @@ class CapriCyberdeckWindow(QWidget):
         self._update_welcome_visibility()
         self._refresh_sidebar_sessions()
 
-        # Offer first-run setup wizard on real desktop launch when no API key is configured
+        # Offer first-run setup wizard on real desktop launch when no API key is configured (skip for local Ollama/LM Studio)
         if (
             not (self.config.llm.api_key or "").strip()
+            and not is_local_llm_endpoint(self.config.llm.provider, self.config.llm.base_url)
             and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
         ):
             QTimer.singleShot(250, self._show_first_run_wizard)
@@ -7382,15 +7397,17 @@ class CapriCyberdeckWindow(QWidget):
                     )
                 else:
                     self.config.llm.api_key = new_key
+                    update_env_value(provider_env_key_name(self.config.llm.provider), new_key)
                     self.agent.reload_config(self.config)
                     save_config(self.config)
                     masked = new_key[:6] + "..." + new_key[-4:] if len(new_key) > 10 else "***"
-                    self._append_message("Система", f"API-ключ обновлён [{masked}] и сохранён.")
+                    self._append_message("Система", f"API-ключ обновлён [{masked}] и сохранён в .env.")
                 return
 
             if len(parts) > 1:
                 resolved = resolve_model_name(parts[1].strip())
                 self.config.llm.model = resolved
+                update_env_value("LLM_MODEL", resolved)
                 self.agent.reload_config(self.config)
                 save_config(self.config)
                 self._update_sys_info()
@@ -7416,10 +7433,11 @@ class CapriCyberdeckWindow(QWidget):
                 self._show_provider_settings()
                 return
             self.config.llm.api_key = new_key
+            update_env_value(provider_env_key_name(self.config.llm.provider), new_key)
             self.agent.reload_config(self.config)
             save_config(self.config)
             masked = new_key[:6] + "..." + new_key[-4:] if len(new_key) > 10 else "***"
-            self._append_message("Система", f"API-ключ обновлён [{masked}] и сохранён.")
+            self._append_message("Система", f"API-ключ обновлён [{masked}] и сохранён в .env.")
             return
 
         if cmd in ("/look", "/vision", "/screen"):

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import httpx
 from typing import List, Dict, Optional
-from .config import AppConfig
+from .config import AppConfig, is_local_llm_endpoint
 
 # Алиасы моделей для быстрого ввода в консоли и GUI
 MODEL_ALIASES: Dict[str, str] = {
@@ -58,58 +58,71 @@ def resolve_model_name(name_or_alias: str) -> str:
     return MODEL_ALIASES.get(cleaned, name_or_alias.strip())
 
 
-async def fetch_available_models(config: AppConfig) -> List[str]:
-    """
-    Запрашивает список доступных диалоговых моделей по текущему API-ключу и провайдеру.
-    """
-    provider = (config.llm.provider or "groq").lower()
-    api_key = config.llm.api_key
-    base_url = config.llm.base_url
-
-    if not api_key:
-        return ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-
-    try:
-        url = f"{base_url.rstrip('/')}/models"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json().get("data", [])
-                result = []
-                for m in data:
-                    mid = m.get("id", "")
-                    # Фильтруем whisper, guard, embeddings, safeguard и специализированные модели
-                    if any(
-                        mid.startswith(x)
-                        for x in [
-                            "whisper",
-                            "meta-llama/llama-prompt-guard",
-                            "canopylabs",
-                            "text-embedding",
-                            "allam",
-                            "openai/gpt-oss-safeguard",
-                        ]
-                    ):
-                        continue
-                    result.append(mid)
-                if result:
-                    return result
-    except Exception:
-        pass
-
-    # Резервные списки по провайдерам
+def _fallback_models_for_provider(provider: str) -> List[str]:
     if provider == "deepseek":
         return ["deepseek-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
-    elif provider == "groq":
+    if provider == "groq":
         return ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-    elif provider == "sambanova":
+    if provider == "sambanova":
         return ["Meta-Llama-3.3-70B-Instruct", "gpt-oss-120b", "MiniMax-M3.1-Flash", "gemma-4-31B-it"]
-    elif provider == "gemini":
+    if provider == "gemini":
         return ["gemini-2.5-flash", "gemini-2.5-pro"]
-    elif provider == "openrouter":
+    if provider == "openrouter":
         return ["deepseek/deepseek-chat", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"]
+    if provider == "openai":
+        return ["gpt-4o-mini", "gpt-4o"]
+    if provider == "ollama":
+        return ["llama3.2", "qwen2.5:7b", "deepseek-r1:8b", "mistral"]
+    if provider == "lmstudio":
+        return ["local-model"]
     return ["deepseek-flash", "openai/gpt-oss-120b"]
+
+
+async def fetch_available_models(config: AppConfig) -> List[str]:
+    """
+    Запрашивает список доступных диалоговых моделей по текущему API-ключу и провайдеру
+    (включая локальные серверы Ollama / LM Studio без API-ключа).
+    """
+    provider = (config.llm.provider or "groq").lower()
+    api_key = (config.llm.api_key or "").strip()
+    base_url = (config.llm.base_url or "").strip()
+    is_local = is_local_llm_endpoint(provider, base_url)
+
+    if not api_key and not is_local:
+        return _fallback_models_for_provider(provider)
+
+    if base_url:
+        try:
+            url = f"{base_url.rstrip('/')}/models"
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    result = []
+                    for m in data:
+                        mid = m.get("id", "")
+                        if not mid:
+                            continue
+                        if any(
+                            mid.startswith(x)
+                            for x in [
+                                "whisper",
+                                "meta-llama/llama-prompt-guard",
+                                "canopylabs",
+                                "text-embedding",
+                                "allam",
+                                "openai/gpt-oss-safeguard",
+                            ]
+                        ):
+                            continue
+                        result.append(mid)
+                    if result:
+                        return result
+        except Exception:
+            pass
+
+    return _fallback_models_for_provider(provider)
 
 
 def format_models_list(current_model: str, available_models: List[str], provider: str = "GROQ") -> str:

@@ -1,5 +1,6 @@
 import logging
 import os
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 import yaml
@@ -58,7 +59,38 @@ PROVIDER_DEFAULTS = {
         "default_model": "gpt-4o-mini",
         "env_key": "OPENAI_API_KEY",
     },
+    "ollama": {
+        "base_url": "http://localhost:11434/v1",
+        "default_model": "llama3.2",
+        "env_key": "OLLAMA_API_KEY",
+    },
+    "lmstudio": {
+        "base_url": "http://localhost:1234/v1",
+        "default_model": "local-model",
+        "env_key": "LMSTUDIO_API_KEY",
+    },
 }
+
+
+def is_local_llm_endpoint(provider: Optional[str], base_url: Optional[str] = None) -> bool:
+    """Return True when the LLM provider or Base URL targets a local OpenAI-compatible server (no API key required)."""
+    prov = (provider or "").strip().lower()
+    if prov in ("ollama", "lmstudio", "local"):
+        return True
+    raw_url = (base_url or "").strip()
+    if not raw_url:
+        return False
+    try:
+        host = (urllib.parse.urlsplit(raw_url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def provider_env_key_name(provider: Optional[str]) -> str:
+    """Return the canonical `.env` variable name for a provider's API key."""
+    prov = (provider or "groq").strip().lower()
+    return PROVIDER_DEFAULTS.get(prov, {}).get("env_key", f"{prov.upper()}_API_KEY")
 
 
 class LLMConfig(BaseModel):
@@ -255,8 +287,6 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         config.voice.tts_engine = "fish"
     elif config.voice.elevenlabs_api_key and "tts_engine" not in data.get("voice", {}):
         config.voice.tts_engine = "elevenlabs"
-    elif config.voice.gemini_api_key and "tts_engine" not in data.get("voice", {}):
-        config.voice.tts_engine = "gemini"
 
     # LLM Auto-detection / Provider setup
     env_model = os.getenv("LLM_MODEL") or os.getenv("GROQ_MODEL")
@@ -291,21 +321,28 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         "gemini": gemini_key,
         "openrouter": openrouter_key,
         "openai": openai_key,
+        "ollama": os.getenv("OLLAMA_API_KEY"),
+        "lmstudio": os.getenv("LMSTUDIO_API_KEY"),
     }
     prov_key = key_map.get(provider)
     if prov_key:
         config.llm.api_key = prov_key.strip()
-    elif capri_key and not config.llm.api_key:
+    elif capri_key and not config.llm.api_key and not is_local_llm_endpoint(provider, config.llm.base_url):
         config.llm.api_key = capri_key.strip()
 
-    if not config.llm.model:
+    explicit_yaml_model = bool(isinstance(data.get("llm"), dict) and data["llm"].get("model"))
+    if not config.llm.model or (not env_model and not explicit_yaml_model and provider in PROVIDER_DEFAULTS):
         config.llm.model = PROVIDER_DEFAULTS.get(provider, {}).get("default_model", "deepseek-flash")
-    elif provider == "deepseek" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("gemini") or config.llm.model.startswith("Meta-")):
+    elif provider == "deepseek" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("gemini") or config.llm.model.startswith("Meta-") or config.llm.model.startswith("gpt-")):
         config.llm.model = PROVIDER_DEFAULTS["deepseek"]["default_model"]
-    elif provider == "sambanova" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("gemini")):
+    elif provider == "sambanova" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("gemini") or config.llm.model.startswith("gpt-4")):
         config.llm.model = PROVIDER_DEFAULTS["sambanova"]["default_model"]
-    elif provider == "groq" and (config.llm.model.startswith("gemini") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("Meta-")):
+    elif provider == "groq" and (config.llm.model.startswith("gemini") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("Meta-") or config.llm.model.startswith("gpt-4")):
         config.llm.model = PROVIDER_DEFAULTS["groq"]["default_model"]
+    elif provider == "gemini" and not config.llm.model.startswith("gemini"):
+        config.llm.model = PROVIDER_DEFAULTS["gemini"]["default_model"]
+    elif provider == "openai" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("gemini") or config.llm.model.startswith("Meta-")):
+        config.llm.model = PROVIDER_DEFAULTS["openai"]["default_model"]
 
     return config
 

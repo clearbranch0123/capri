@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from .. import __version__
-from .config import AppConfig, ROOT_DIR, USER_CONFIG_DIR, USER_CONFIG_FILE, USER_ENV_FILE
+from .config import AppConfig, ROOT_DIR, USER_CONFIG_DIR, USER_CONFIG_FILE, USER_ENV_FILE, is_local_llm_endpoint
 from .policy import VALID_POLICY_MODES
 
 CheckStatus = Literal["OK", "WARN", "FAIL"]
@@ -47,6 +47,12 @@ def _check_llm(config: AppConfig) -> DiagnosticItem:
     has_key = bool((config.llm.api_key or "").strip())
     if has_key:
         return DiagnosticItem("LLM-ядро", "OK", f"{prov} / {model} (API-ключ настроен)")
+    if is_local_llm_endpoint(config.llm.provider, config.llm.base_url):
+        return DiagnosticItem(
+            "LLM-ядро",
+            "OK",
+            f"{prov} / {model} (локальный сервер `{config.llm.base_url}`, API-ключ не требуется)",
+        )
     return DiagnosticItem(
         "LLM-ядро",
         "FAIL",

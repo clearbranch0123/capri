@@ -6,7 +6,7 @@ import time
 from typing import AsyncGenerator, Callable, List, Optional
 from openai import AsyncOpenAI
 
-from .config import AppConfig
+from .config import AppConfig, is_local_llm_endpoint
 from .policy import ToolPolicyEngine, ApprovalHandler
 from .prompts import get_system_prompt
 from .emotions import EmotionEngine
@@ -631,10 +631,13 @@ class CapriAgent:
             self._init_client()
         self._client_loop = current_loop
 
-        if not self.config.llm.api_key:
+        if not self.config.llm.api_key and not is_local_llm_endpoint(
+            self.config.llm.provider,
+            self.config.llm.base_url,
+        ):
             yield AgentEvent(
                 "error",
-                "API ключ не настроен! Добавь его в .env (GROQ_API_KEY, GEMINI_API_KEY, etc.).",
+                "API ключ не настроен! Добавь его в .env (GROQ_API_KEY, DEEPSEEK_API_KEY и т.д.) или выбери локальный Ollama / LM Studio.",
             )
             return
 
@@ -717,8 +720,21 @@ class CapriAgent:
                 if stream:
                     request_kwargs["stream"] = True
 
-                # Call LLM (streaming with seamless fallback to non-streaming responses/mocks)
-                response = await client.chat.completions.create(**request_kwargs)
+                # Call LLM (streaming with seamless fallback to non-streaming responses/mocks;
+                # if a local Ollama/LM Studio model does not support tool calling, automatically retry without tools)
+                try:
+                    response = await client.chat.completions.create(**request_kwargs)
+                except Exception as tool_exc:
+                    err_low = str(tool_exc).lower()
+                    if "tools" in request_kwargs and (
+                        "does not support tools" in err_low
+                        or "tool calling is not supported" in err_low
+                        or "tools is not supported" in err_low
+                    ):
+                        request_kwargs.pop("tools", None)
+                        response = await client.chat.completions.create(**request_kwargs)
+                    else:
+                        raise
             except Exception as e:
                 # Откатываем последнее сообщение пользователя при ошибке LLM, чтобы не ломать диалог
                 if self.history and self.history[-1].get("role") == "user":

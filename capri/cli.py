@@ -564,7 +564,7 @@ async def main():
 
                 elif cmd in ("/model", "/models"):
                     from capri.core.models import fetch_available_models, resolve_model_name, format_models_list
-                    from capri.core.config import save_config
+                    from capri.core.config import provider_env_key_name, save_config, update_env_value
                     if len(cmd_parts) > 1 and cmd_parts[1].lower() == "key":
                         new_key = cmd_parts[2].strip() if len(cmd_parts) > 2 else ""
                         if not new_key:
@@ -572,14 +572,16 @@ async def main():
                             console.print(f"Текущий API-ключ ({config.llm.provider or 'GROQ'}): [cyan]{masked}[/cyan]. Смена: /model key <ключ>")
                         else:
                             config.llm.api_key = new_key
+                            update_env_value(provider_env_key_name(config.llm.provider), new_key)
                             agent.reload_config(config)
                             save_config(config)
                             masked = new_key[:6] + "..." + new_key[-4:] if len(new_key) > 10 else "***"
-                            console.print(f"[bold green]✓ API-ключ обновлен [{masked}] и сохранен в config.yaml.[/bold green]")
+                            console.print(f"[bold green]✓ API-ключ обновлен [{masked}] и сохранен в .env (0600).[/bold green]")
                     elif len(cmd_parts) > 1:
                         target = cmd_parts[1].strip()
                         resolved = resolve_model_name(target)
                         config.llm.model = resolved
+                        update_env_value("LLM_MODEL", resolved)
                         agent.reload_config(config)
                         save_config(config)
                         console.print(f"[bold green]✓ Модель нейросети переключена на [{resolved}]. Настройки сохранены.[/bold green]")
@@ -592,17 +594,18 @@ async def main():
                     continue
 
                 elif cmd in ("/key", "/apikey"):
-                    from capri.core.config import save_config
+                    from capri.core.config import provider_env_key_name, save_config, update_env_value
                     new_key = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
                     if not new_key:
                         masked = (config.llm.api_key[:6] + "..." + config.llm.api_key[-4:]) if config.llm.api_key else "НЕ ЗАДАН"
                         console.print(f"Текущий API-ключ ({config.llm.provider or 'GROQ'}): [cyan]{masked}[/cyan]. Смена: /key <ключ>")
                     else:
                         config.llm.api_key = new_key
+                        update_env_value(provider_env_key_name(config.llm.provider), new_key)
                         agent.reload_config(config)
                         save_config(config)
                         masked = new_key[:6] + "..." + new_key[-4:] if len(new_key) > 10 else "***"
-                        console.print(f"[bold green]✓ API-ключ обновлен [{masked}] и сохранен в config.yaml.[/bold green]")
+                        console.print(f"[bold green]✓ API-ключ обновлен [{masked}] и сохранен в .env (0600).[/bold green]")
                     console.print(prompt_str, end="")
                     sys.stdout.flush()
                     continue
