@@ -108,6 +108,41 @@ def test_ollama_and_lmstudio_keyless_provider_flow(monkeypatch, tmp_path):
     assert cfg.llm.model == "llama3.2"
     assert cfg.llm.api_key == ""
 
+    # 1b. Switching manually via LLM_PROVIDER=ollama over an existing cloud config.yaml resets stale cloud model,
+    # while preserving explicit local Ollama tags (e.g. `deepseek-r1:8b`) when config.yaml already targets ollama.
+    stale_cloud_yaml = tmp_path / "stale_cloud.yaml"
+    stale_cloud_yaml.write_text("llm:\n  provider: groq\n  model: openai/gpt-oss-120b\n", encoding="utf-8")
+    cfg_overridden = load_config(stale_cloud_yaml)
+    assert cfg_overridden.llm.provider == "ollama"
+    assert cfg_overridden.llm.model == "llama3.2"
+
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    stale_yaml_edit = tmp_path / "stale_yaml_edit.yaml"
+    stale_yaml_edit.write_text("llm:\n  provider: ollama\n  model: deepseek-flash\n", encoding="utf-8")
+    assert load_config(stale_yaml_edit).llm.model == "llama3.2"
+
+    valid_local_yaml = tmp_path / "valid_local_tag.yaml"
+    valid_local_yaml.write_text("llm:\n  provider: ollama\n  model: deepseek-r1:8b\n", encoding="utf-8")
+    assert load_config(valid_local_yaml).llm.model == "deepseek-r1:8b"
+
+    # 1c. Stale cloud LLM_MODEL in .env is rejected when LLM_PROVIDER=ollama,
+    # and a valid local tag in config.yaml (`deepseek-r1:8b`) is preserved even when LLM_PROVIDER=ollama overrides YAML provider!
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-oss-120b")
+    assert load_config(tmp_path / "env_stale_cloud.yaml").llm.model == "llama3.2"
+
+    mixed_yaml = tmp_path / "mixed_local_tag.yaml"
+    mixed_yaml.write_text("llm:\n  provider: groq\n  model: deepseek-r1:8b\n", encoding="utf-8")
+    assert load_config(mixed_yaml).llm.model == "deepseek-r1:8b"
+
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    assert load_config(mixed_yaml).llm.model == "deepseek-r1:8b"
+
+    # Valid local LLM_MODEL in .env takes precedence cleanly
+    monkeypatch.setenv("LLM_MODEL", "qwen2.5:14b")
+    assert load_config(mixed_yaml).llm.model == "qwen2.5:14b"
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
     # 2. /doctor reports OK for local keyless Ollama (and FAIL for keyless cloud Groq)
     diag = {i.name: i for i in run_diagnostics(cfg, sessions_db_path=tmp_path / "s.db")}
     assert diag["LLM-ядро"].status == "OK"

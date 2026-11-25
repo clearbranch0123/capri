@@ -1,6 +1,6 @@
 # Maintainer: D <clearbranch0123@users.noreply.github.com>
 pkgname=capri-companion
-pkgver=3.6.0
+pkgver=3.6.1
 pkgrel=1
 pkgdesc="Cyberpunk local-first AI companion for Wayland (Niri / Hyprland / wlroots) & PipeWire"
 arch=('any')
@@ -40,7 +40,8 @@ optdepends=(
     'chromium: optional JS rendering (--js) in the isolated browser'
 )
 source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('15fd1f2782089df4460f772e70293dc9a97426da31f52a7935c555c97449e4e8')
+# In-tree PKGBUILD uses SKIP so the tagged commit matches main; pin to the tag archive SHA-256 when publishing to AUR.
+sha256sums=('SKIP')
 
 build() {
     cd "${srcdir}/capri-${pkgver}"

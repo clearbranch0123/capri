@@ -5,6 +5,21 @@
 
 ---
 
+## [3.6.1] — 2026-11-26 (Keyless Ollama / LM Studio, Provider Persistence & BYOV Voice Polish)
+
+Сервисный релиз полировки локальных провайдеров, сохранения ключей/моделей, настроек голоса и витрины перед широким анонсом.
+
+### 🤖 Локальные провайдеры (`Ollama` / `LM Studio`) и надёжность `/key` / `/model`
+- **Работа без API-ключа из коробки (`capri/core/config.py`, `capri/core/agent.py`, `capri/core/doctor.py`, `capri/core/models.py`, `capri/ui/cyberdeck.py`):** добавлены провайдеры `ollama` (`http://localhost:11434/v1`) и `lmstudio` (`http://localhost:1234/v1`) в Настройки и Мастер `/setup`. Диалог, `/doctor` (`OK`), проверка сервера в UI и живой список моделей `/model` работают на `localhost`/`127.0.0.1` без API-ключа и без повторного показа мастера первого запуска.
+- **Авто-фоллбэк без `tools` и защита от чужих моделей:** если выбранная в Ollama модель (например, `deepseek-r1:8b` или `gemma`) не поддерживает tool calling (`400 does not support tools`), `CapriAgent` автоматически повторяет запрос без `tools`. При переключении провайдера через `LLM_PROVIDER` или `config.yaml` облачные модели автоматически заменяются на локальный дефолт с сохранением валидных тегов вида `deepseek-r1:8b`.
+- **Надёжное сохранение `/key` и `/model` в `.env` (`capri/ui/cyberdeck.py`, `capri/cli.py`):** команды `/key`, `/model key` и `/model` теперь синхронно обновляют `.env` (`0600`) и `LLM_MODEL`, чтобы настройки не терялись и не откатывались при перезапуске.
+
+### 🎙️ Чистка TTS (Bring Your Own Voice) и оформление репозитория
+- **Сфокусированный выбор TTS (`capri/ui/cyberdeck.py`, `README.md`, `README.ru.md`, `.env.example`):** в UI оставлены 3 рабочих движка — **Fish Audio** *(рекомендуется)*, **ElevenLabs** и **Edge TTS** *(бесплатный резерв без ключа)* с двуязычными подсказками и гайдом **Bring Your Own Voice** (включая совет подбирать язык голосовой модели под язык общения).
+- **Документация и витрина:** добавлены `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, шаблоны Issue/PR, живой бейдж CI, секция Arch `PKGBUILD` в README и плавная 24 FPS Linux/Niri демонстрация. Верификация релиза: **290/290 passed, 0 warnings**.
+
+---
+
 ## [3.6.0] — 2026-11-24 (Voice 3.0, Focus & Watch Companion, Arch Ecosystem & Hardened MCP)
 
 Крупное обновление скорости голоса, повседневных инструментов разработчика, нативной интеграции с Arch / CachyOS, двуязычного интерфейса и безопасности окружения **Capri AI Companion**.

@@ -15,7 +15,7 @@ body:
     attributes:
       label: Capri Version
       description: Output of `capri --version`
-      placeholder: "3.6.0"
+      placeholder: "3.6.1"
     validations:
       required: true
 

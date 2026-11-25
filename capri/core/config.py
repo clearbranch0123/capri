@@ -87,6 +87,67 @@ def is_local_llm_endpoint(provider: Optional[str], base_url: Optional[str] = Non
     return host in ("localhost", "127.0.0.1", "::1")
 
 
+def _is_cloud_only_model_id(model: str) -> bool:
+    """Return True if `model` is a known cloud-provider API identifier unsuitable as a local Ollama/LM Studio default."""
+    m = (model or "").strip()
+    if not m or ":" in m:
+        # Colon-tagged names like `deepseek-r1:8b` or `qwen2.5:14b` are valid local Ollama tags
+        return False
+    cloud_prefixes = (
+        "openai/",
+        "deepseek-",
+        "deepseek/",
+        "gemini-",
+        "gpt-4",
+        "gpt-3.5",
+        "Meta-Llama-",
+        "anthropic/",
+        "MiniMax-",
+    )
+    return m.startswith(cloud_prefixes) or m in {"qwen/qwen3.8-27b", "gemma-4-31B-it"}
+
+
+def _is_model_incompatible_with_provider(provider: str, model: str) -> bool:
+    """Return True when `model` clearly belongs to a different LLM provider and should fall back."""
+    m = (model or "").strip()
+    if not m:
+        return True
+    p = (provider or "").strip().lower()
+    if p == "ollama":
+        return _is_cloud_only_model_id(m) or m == "local-model"
+    if p == "lmstudio":
+        return _is_cloud_only_model_id(m)
+    if p == "deepseek":
+        return (
+            m.startswith(("openai/", "gemini", "Meta-", "gpt-", "anthropic/", "qwen/"))
+            or m in ("llama3.2", "local-model")
+            or ":" in m
+        )
+    if p == "sambanova":
+        return (
+            m.startswith(("openai/", "deepseek", "gemini", "gpt-4", "gpt-3.5", "anthropic/", "qwen/"))
+            or m in ("llama3.2", "local-model")
+            or ":" in m
+        )
+    if p == "groq":
+        return (
+            m.startswith(("gemini", "deepseek", "Meta-", "gpt-4", "gpt-3.5", "anthropic/"))
+            or m in ("llama3.2", "local-model")
+            or ":" in m
+        )
+    if p == "gemini":
+        return not m.startswith("gemini")
+    if p == "openai":
+        return (
+            m.startswith(("openai/", "deepseek", "gemini", "Meta-", "anthropic/", "qwen/"))
+            or m in ("llama3.2", "local-model")
+            or ":" in m
+        )
+    if p == "openrouter":
+        return m in ("llama3.2", "local-model") or ("/" not in m and ":" in m)
+    return False
+
+
 def provider_env_key_name(provider: Optional[str]) -> str:
     """Return the canonical `.env` variable name for a provider's API key."""
     prov = (provider or "groq").strip().lower()
@@ -330,19 +391,17 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     elif capri_key and not config.llm.api_key and not is_local_llm_endpoint(provider, config.llm.base_url):
         config.llm.api_key = capri_key.strip()
 
-    explicit_yaml_model = bool(isinstance(data.get("llm"), dict) and data["llm"].get("model"))
-    if not config.llm.model or (not env_model and not explicit_yaml_model and provider in PROVIDER_DEFAULTS):
-        config.llm.model = PROVIDER_DEFAULTS.get(provider, {}).get("default_model", "deepseek-flash")
-    elif provider == "deepseek" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("gemini") or config.llm.model.startswith("Meta-") or config.llm.model.startswith("gpt-")):
-        config.llm.model = PROVIDER_DEFAULTS["deepseek"]["default_model"]
-    elif provider == "sambanova" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("gemini") or config.llm.model.startswith("gpt-4")):
-        config.llm.model = PROVIDER_DEFAULTS["sambanova"]["default_model"]
-    elif provider == "groq" and (config.llm.model.startswith("gemini") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("Meta-") or config.llm.model.startswith("gpt-4")):
-        config.llm.model = PROVIDER_DEFAULTS["groq"]["default_model"]
-    elif provider == "gemini" and not config.llm.model.startswith("gemini"):
-        config.llm.model = PROVIDER_DEFAULTS["gemini"]["default_model"]
-    elif provider == "openai" and (config.llm.model.startswith("openai/") or config.llm.model.startswith("deepseek") or config.llm.model.startswith("gemini") or config.llm.model.startswith("Meta-")):
-        config.llm.model = PROVIDER_DEFAULTS["openai"]["default_model"]
+    yaml_llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    yaml_model = str(yaml_llm.get("model") or "").strip()
+    env_model_clean = (env_model or "").strip()
+    default_model = PROVIDER_DEFAULTS.get(provider, {}).get("default_model", "deepseek-flash")
+
+    if env_model_clean and not _is_model_incompatible_with_provider(provider, env_model_clean):
+        config.llm.model = env_model_clean
+    elif yaml_model and not _is_model_incompatible_with_provider(provider, yaml_model):
+        config.llm.model = yaml_model
+    else:
+        config.llm.model = default_model
 
     return config
 
