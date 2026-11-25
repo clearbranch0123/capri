@@ -3,6 +3,7 @@
 🇬🇧 **[English](README.md)** · 🇷🇺 **Русский**
 
 [![Version](https://img.shields.io/badge/version-v3.6.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.0)
+[![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/Tests-289%2F289%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
@@ -49,7 +50,7 @@
 
 ## 🚀 Установка, обновление и удаление
 
-### 1. Чистая установка
+### 1. Чистая установка (исходники / `.venv`)
 ```bash
 git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./setup.sh              # Полная установка (ядро + voice, local-stt, vision, web)
@@ -57,6 +58,15 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./setup.sh --minimal    # Базовый GUI/CLI/LLM/MCP без тяжёлых голосовых/STT-пакетов
 ```
 Скрипт создаст `.venv`, установит пакет `capri` (`capri`, `capri-deck`, `capri-avatar`), развернёт чистые шаблоны `$XDG_CONFIG_HOME/capri/.env` (`0600`) и `config.yaml` (по умолчанию в `~/.config/capri/`) и установит `.desktop`-файл. При установке через `pip` доступны модульные группы: `pip install .`, `pip install ".[voice]"`, `pip install ".[local-stt]"`, `pip install ".[vision]"`, `pip install ".[web]"` или `pip install ".[all]"`. Подробная карта модулей, IPC и модель безопасности описаны в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### Нативный пакет Arch / CachyOS (`PKGBUILD` и `systemd --user`)
+```bash
+cd packaging/arch
+makepkg -si                                          # Ставит capri-companion и /usr/lib/systemd/user/capri-avatar.service
+systemctl --user enable --now capri-avatar.service   # Опционально: автозапуск аватара с graphical-session.target
+# Или установка пользовательского сервиса для .venv:
+capri --service install --start
+```
 
 ### 2. Настройка API-ключей и передача данных
 Ключи хранятся **только локально** в `~/.config/capri/.env` (права `0600`) и никогда не записываются в `config.yaml`.

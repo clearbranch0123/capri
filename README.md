@@ -3,6 +3,7 @@
 🇬🇧 **English** · 🇷🇺 **[Русский](README.ru.md)**
 
 [![Version](https://img.shields.io/badge/version-v3.6.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.0)
+[![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/Tests-289%2F289%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
@@ -61,7 +62,7 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 
 ## 🚀 Install, Upgrade & Uninstall
 
-### 1. Clean Install
+### 1. Clean Install (Source / `.venv`)
 ```bash
 git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./setup.sh              # Full install (core + voice, local-stt, vision, web extras)
@@ -69,6 +70,15 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 ./setup.sh --minimal    # Core GUI/CLI/LLM/MCP without heavy voice/STT extras
 ```
 `setup.sh` creates `.venv`, installs the `capri` package (`capri`, `capri-deck`, `capri-avatar`), initializes clean templates in `$XDG_CONFIG_HOME/capri/` (default `~/.config/capri/`, `.env` with `0600` permissions), and installs the `.desktop` launcher. For custom `pip` installs, optional dependency groups are available: `pip install .`, `pip install ".[voice]"`, `pip install ".[local-stt]"`, `pip install ".[vision]"`, `pip install ".[web]"`, or `pip install ".[all]"`. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full module map, IPC layout, and security boundaries.
+
+### Arch / CachyOS Native Package (`PKGBUILD` & `systemd --user`)
+```bash
+cd packaging/arch
+makepkg -si                                          # Installs capri-companion + /usr/lib/systemd/user/capri-avatar.service
+systemctl --user enable --now capri-avatar.service   # Optional: auto-start desktop avatar with graphical-session.target
+# Or manage a user-level unit directly from source/.venv installs:
+capri --service install --start
+```
 
 ### 2. API Keys & Cloud Data Boundary
 API keys are stored **locally only** in `~/.config/capri/.env` (`0600`) and are never written to `config.yaml`.
