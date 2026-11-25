@@ -33,7 +33,7 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 
 ## 🖼️ Live Avatar & Interface (Crimson Graphite)
 
-### Live Spatial Wayland Avatar (Voice 2.0, Physics, Perch & Quick Controls)
+### Live Spatial Wayland Avatar (Voice 3.0, Focus Timer, Physics & Quick Controls)
 ![Capri Live Spatial Avatar Demo](docs/screenshots/capri-demo.webp)
 
 ### Cyberdeck

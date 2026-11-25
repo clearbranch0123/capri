@@ -21,7 +21,7 @@
 
 ## 🖼️ Живой аватар и интерфейс Capri (Crimson Graphite)
 
-### Живой Wayland-аватар в действии (Voice 2.0, Physics, Perch & Quick Controls)
+### Живой Wayland-аватар в действии (Voice 3.0, Фокус-таймер, физика и быстрое меню)
 ![Capri Live Spatial Avatar Demo](docs/screenshots/capri-demo.ru.webp)
 
 ### Cyberdeck
