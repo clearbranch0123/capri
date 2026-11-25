@@ -2217,11 +2217,31 @@ class CapriProviderSettingsDialog(QDialog):
 
         self.combo_tts_engine = QComboBox()
         self.combo_tts_engine.setMinimumHeight(36)
-        self.combo_tts_engine.addItem("Fish Audio (Нейронный голос)", "fish")
-        self.combo_tts_engine.addItem("Edge TTS (Бесплатный облачный)", "edge")
-        self.combo_tts_engine.addItem("ElevenLabs (Облачный)", "elevenlabs")
-        self.combo_tts_engine.addItem("Gemini TTS (Google)", "gemini")
-        self.combo_tts_engine.addItem("Silero TTS (Локальный оффлайн)", "silero")
+        ui_lang = resolve_ui_lang(self.config)
+        self.combo_tts_engine.addItem(
+            tr_ui(
+                "Fish Audio (Рекомендуется — живой голос)",
+                "Fish Audio (Recommended — expressive voice)",
+                lang=ui_lang,
+            ),
+            "fish",
+        )
+        self.combo_tts_engine.addItem(
+            tr_ui(
+                "ElevenLabs (Облачный нейронный)",
+                "ElevenLabs (Cloud neural voice)",
+                lang=ui_lang,
+            ),
+            "elevenlabs",
+        )
+        self.combo_tts_engine.addItem(
+            tr_ui(
+                "Edge TTS (Бесплатный резерв без ключа)",
+                "Edge TTS (Free fallback — no key)",
+                lang=ui_lang,
+            ),
+            "edge",
+        )
         cur_tts = (getattr(self.config.voice, "tts_engine", "fish") or "fish").strip().lower()
         tts_idx = self.combo_tts_engine.findData(cur_tts)
         self.combo_tts_engine.setCurrentIndex(tts_idx if tts_idx >= 0 else 0)
@@ -2635,14 +2655,25 @@ class CapriProviderSettingsDialog(QDialog):
 
     def _sync_tts_provider_panels(self):
         eng = (self.combo_tts_engine.currentData() or "fish").lower()
+        ui_lang = resolve_ui_lang(self.config)
         self.fish_panel.setVisible(eng == "fish")
         self.eleven_panel.setVisible(eng == "elevenlabs")
         hints = {
-            "fish": "",
-            "edge": "Edge TTS работает бесплатно без API-ключа (требуется интернет).",
-            "elevenlabs": "",
-            "gemini": "Gemini TTS использует Gemini API-ключ со вкладки «Зрение и API».",
-            "silero": "Silero TTS синтезирует речь полностью локально на CPU/GPU без API-ключей.",
+            "fish": tr_ui(
+                "Используй свой API-ключ и Voice ID с fish.audio. Совет: подбирай голос на том же языке, на котором общаешься с Капри (RU-голос для русского, EN-голос для английского).",
+                "Use your own API key and Voice ID from fish.audio. Tip: match the voice language to your chat language (EN voice for English, RU voice for Russian) to avoid accent distortion.",
+                lang=ui_lang,
+            ),
+            "elevenlabs": tr_ui(
+                "Используй свой API-ключ и Voice ID из ElevenLabs. Для естественного звучания язык голоса должен совпадать с языком общения.",
+                "Use your own ElevenLabs API key and Voice ID. Match the voice language to your chat language for natural pronunciation.",
+                lang=ui_lang,
+            ),
+            "edge": tr_ui(
+                "Бесплатный резервный TTS без API-ключа (базовый голос). Для выразительного живого звучания рекомендуется Fish Audio или ElevenLabs.",
+                "Free fallback TTS with no API key required (basic voice). For a more expressive character voice, use Fish Audio or ElevenLabs.",
+                lang=ui_lang,
+            ),
         }
         txt = hints.get(eng, "")
         self.lbl_tts_engine_hint.setText(txt)

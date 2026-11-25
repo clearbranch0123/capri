@@ -40,7 +40,7 @@ optdepends=(
     'chromium: optional JS rendering (--js) in the isolated browser'
 )
 source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('15fd1f2782089df4460f772e70293dc9a97426da31f52a7935c555c97449e4e8')
 
 build() {
     cd "${srcdir}/capri-${pkgver}"

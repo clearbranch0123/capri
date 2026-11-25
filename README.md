@@ -97,7 +97,15 @@ API keys are stored **locally only** in `~/.config/capri/.env` (`0600`) and are 
    - **DeepSeek**: `DEEPSEEK_API_KEY=...` (`platform.deepseek.com`)
    - **Google Gemini** *(chat + Vision AI)*: `GEMINI_API_KEY=...` (`aistudio.google.com`)
    - **OpenRouter**: `OPENROUTER_API_KEY=...` (`openrouter.ai`)
-   - **Fish Audio** *(optional expressive TTS)*: `FISH_AUDIO_API_KEY=...` and `FISH_AUDIO_VOICE_ID=...` *(free Edge TTS works with no key)*
+   - **Fish Audio** *(recommended expressive TTS — Bring Your Own Voice)*: `FISH_AUDIO_API_KEY=...` and `FISH_AUDIO_VOICE_ID=...` *(free Edge TTS works as a zero-key fallback)*
+   - **ElevenLabs** *(alternative cloud neural TTS)*: `ELEVENLABS_API_KEY=...` and `ELEVENLABS_VOICE_ID=...`
+
+> **🎙️ Custom Voice Setup (Bring Your Own Voice):**
+> Capri does **not** bundle or hardcode third-party dubbed voice models. By default, free **Edge TTS** works with no API key as a basic fallback. For an expressive character voice:
+> 1. Create your own account & API key on **Fish Audio** (`fish.audio`, recommended) or **ElevenLabs** (`elevenlabs.io`).
+> 2. Pick a voice from their catalog or configure your own licensed/authorized voice profile in your personal account, and copy its **Voice / Model ID**.
+> 3. Paste your API key and Voice ID in **Cyberdeck Settings → Voice** (or `~/.config/capri/.env`).
+> 4. **Language tip:** Match the voice model's native language to the language you speak with Capri — an English voice model noticeably distorts Russian pronunciation, and a Russian voice model sounds unnatural in English.
 
 ### 3. Run & Test
 ```bash
