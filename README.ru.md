@@ -61,6 +61,7 @@ git clone https://github.com/clearbranch0123/capri.git && cd capri
 
 ### Нативный пакет Arch / CachyOS (`PKGBUILD` и `systemd --user`)
 ```bash
+# Берите `packaging/arch/PKGBUILD` из ветки `main` или из ассетов GitHub Release (там закреплён реальный SHA-256 архива тега)
 cd packaging/arch
 makepkg -si                                          # Ставит capri-companion и /usr/lib/systemd/user/capri-avatar.service
 systemctl --user enable --now capri-avatar.service   # Опционально: автозапуск аватара с graphical-session.target
