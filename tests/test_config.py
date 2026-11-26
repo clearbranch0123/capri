@@ -211,3 +211,169 @@ def test_ollama_and_lmstudio_keyless_provider_flow(monkeypatch, tmp_path):
     assert "ollama" in dlg.providers_map.values()
     assert "lmstudio" in dlg.providers_map.values()
     dlg.close()
+
+
+def test_live_http_wire_smoke_ollama_and_lmstudio_keyless_streaming(tmp_path):
+    """
+    Real TCP/HTTP wire-level integration test (zero HTTP/OpenAI client mocks) against a live local
+    OpenAI-compatible server emulating both Ollama (400 `does not support tools` -> retry -> SSE stream)
+    and LM Studio (`/v1/models` + `/v1/chat/completions` without Authorization header).
+    """
+    import asyncio
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from unittest.mock import patch
+    from capri.core.agent import CapriAgent
+    from capri.core.emotions import EmotionEngine
+    from capri.core.memory import MemoryStore
+    from capri.core.models import fetch_available_models
+    from capri.core.sessions import SessionManager
+    from capri.ui.cyberdeck import check_api_key_sync
+
+    recorded_requests: list[dict] = []
+
+    class _LocalOpenAIServerHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def do_GET(self):
+            recorded_requests.append({"method": "GET", "path": self.path, "auth": self.headers.get("Authorization")})
+            if self.path == "/v1/models":
+                body = json.dumps(
+                    {
+                        "object": "list",
+                        "data": [
+                            {"id": "deepseek-r1:8b", "object": "model"},
+                            {"id": "qwen2.5-coder:7b", "object": "model"},
+                        ],
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            payload = json.loads(raw.decode("utf-8"))
+            recorded_requests.append(
+                {
+                    "method": "POST",
+                    "path": self.path,
+                    "model": payload.get("model"),
+                    "has_tools": "tools" in payload,
+                    "stream": bool(payload.get("stream")),
+                }
+            )
+            if self.path != "/v1/chat/completions":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            # Exact Ollama HTTP 400 error when a reasoning/non-tool model receives `tools`
+            if payload.get("model") == "deepseek-r1:8b" and "tools" in payload:
+                err_body = json.dumps({"error": {"message": "registry.ollama.ai/library/deepseek-r1:8b does not support tools", "type": "api_error"}}).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err_body)))
+                self.end_headers()
+                self.wfile.write(err_body)
+                return
+
+            if payload.get("stream"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                chunks = [
+                    {"id": "chatcmpl-local-1", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Живой "}, "finish_reason": None}]},
+                    {"id": "chatcmpl-local-1", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "ответ по HTTP!"}, "finish_reason": "stop"}]},
+                ]
+                for ch in chunks:
+                    self.wfile.write(f"data: {json.dumps(ch, ensure_ascii=False)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
+
+            ok_body = json.dumps(
+                {
+                    "id": "chatcmpl-lmstudio-1",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "LM Studio OK."}, "finish_reason": "stop"}],
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(ok_body)))
+            self.end_headers()
+            self.wfile.write(ok_body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _LocalOpenAIServerHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{port}/v1"
+
+    try:
+        # A. Live keyless server check + /models discovery
+        ok, msg = check_api_key_sync("llm", "", base_url=base_url)
+        assert ok is True
+        assert "HTTP 200" in msg
+        assert recorded_requests[-1]["auth"] is None
+
+        ollama_cfg = AppConfig()
+        ollama_cfg.llm.provider = "ollama"
+        ollama_cfg.llm.base_url = base_url
+        ollama_cfg.llm.model = "deepseek-r1:8b"
+        ollama_cfg.llm.api_key = ""
+        ollama_cfg.voice.tts_enabled = False
+
+        discovered = asyncio.run(fetch_available_models(ollama_cfg))
+        assert discovered == ["deepseek-r1:8b", "qwen2.5-coder:7b"]
+
+        # B. Real AsyncOpenAI streaming against Ollama endpoint (triggers HTTP 400 -> toolless retry -> SSE stream)
+        iso_sm = SessionManager(db_path=tmp_path / "wire_sessions.db")
+        with (
+            patch("capri.core.agent.EmotionEngine", side_effect=lambda: EmotionEngine(file_path=tmp_path / "wire_emo.json")),
+            patch("capri.core.agent.MemoryStore", side_effect=lambda: MemoryStore(file_path=tmp_path / "wire_mem.json")),
+        ):
+            agent_ollama = CapriAgent(ollama_cfg, session_manager=iso_sm)
+
+        async def _stream_ollama():
+            return [ev async for ev in agent_ollama.chat("Проверка сокета", speak=False, stream=True)]
+
+        ev_ollama = asyncio.run(_stream_ollama())
+        assert any(ev.type == "done" and "Живой ответ по HTTP!" in ev.data for ev in ev_ollama)
+        post_calls = [r for r in recorded_requests if r["method"] == "POST"]
+        assert len(post_calls) >= 2
+        assert post_calls[0]["has_tools"] is True and post_calls[1]["has_tools"] is False
+
+        # C. Real AsyncOpenAI against LM Studio config (non-streaming, tool-capable model)
+        lms_cfg = AppConfig()
+        lms_cfg.llm.provider = "lmstudio"
+        lms_cfg.llm.base_url = base_url
+        lms_cfg.llm.model = "qwen2.5-coder:7b"
+        lms_cfg.llm.api_key = ""
+        lms_cfg.voice.tts_enabled = False
+        with (
+            patch("capri.core.agent.EmotionEngine", side_effect=lambda: EmotionEngine(file_path=tmp_path / "wire_emo2.json")),
+            patch("capri.core.agent.MemoryStore", side_effect=lambda: MemoryStore(file_path=tmp_path / "wire_mem2.json")),
+        ):
+            agent_lms = CapriAgent(lms_cfg, session_manager=iso_sm)
+
+        async def _call_lms():
+            return [ev async for ev in agent_lms.chat("Проверка LM Studio", speak=False, stream=False)]
+
+        ev_lms = asyncio.run(_call_lms())
+        assert any(ev.type == "done" and "LM Studio OK." in ev.data for ev in ev_lms)
+    finally:
+        server.shutdown()
+        server.server_close()

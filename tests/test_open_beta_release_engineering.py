@@ -262,7 +262,12 @@ def test_open_beta_governance_and_github_files_present():
         "the Capri project (https://github.com/lachydotmcg/capri-desktop). Capri's art and animations are by her "
         "artist, who prefers to stay private. Parts made by others keep their own licences, listed in its README."
     ) in assets_notice
-    assert "Security Advisories" in (ROOT_DIR / "SECURITY.md").read_text(encoding="utf-8")
+    security_md = (ROOT_DIR / "SECURITY.md").read_text(encoding="utf-8")
+    assert "Security Advisories" in security_md
+    from capri import __version__ as capri_ver
+    ver_parts = capri_ver.split(".")
+    expected_branch = f"{ver_parts[0]}.{ver_parts[1]}.x"
+    assert expected_branch in security_md, f"SECURITY.md Supported Versions must track {expected_branch}"
     readme_en = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
     assert "README.ru.md" in readme_en
     assert "not affiliated with" in readme_en.lower()

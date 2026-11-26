@@ -40,8 +40,8 @@ optdepends=(
     'chromium: optional JS rendering (--js) in the isolated browser'
 )
 source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-# In-tree PKGBUILD uses SKIP so the tagged commit matches main; pin to the tag archive SHA-256 when publishing to AUR.
-sha256sums=('SKIP')
+# Pinned to the published v3.6.1 tag archive SHA-256 (refresh via `updpkgsums` / `makepkg -g` after tagging a new release).
+sha256sums=('7c2e212d2f8292993eda3b1e48c2532f5e995c6d5597698f8b038ac2f8b3715b')
 
 build() {
     cd "${srcdir}/capri-${pkgver}"

@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-v3.6.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.1)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-290%2F290%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-291%2F291%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
@@ -86,7 +86,7 @@ API keys are stored **locally only** in `~/.config/capri/.env` (`0600`) and are 
 > **What leaves your machine:** `sessions.db`, unapproved `pending_memory.json` candidates, `emotion.json`, and `.env` never leave your PC. When cloud providers are configured, only the payload required for each active capability is transmitted:
 > - **Cloud LLM:** system prompt, active conversation window, and user-approved memory facts;
 > - **Cloud STT** (`Groq Whisper`): recorded audio snippet for transcription;
-> - **Cloud TTS** (`Fish Audio`, `ElevenLabs`, `Edge`, `Gemini TTS`): assistant reply text for synthesis;
+> - **Cloud TTS** (`Fish Audio`, `ElevenLabs`, `Edge`): assistant reply text for synthesis *(legacy `gemini` / `silero` / `xtts` backend paths in `capri/voice/tts.py` remain available only for backward compatibility with older `config.yaml` files and are hidden from the UI)*;
 > - **Cloud Vision** (`Gemini Vision`): desktop screenshot or attached image.
 >
 > Using a local OpenAI-compatible server (Ollama / LM Studio) with local STT/TTS keeps chat and voice inference on-device; optional network tools (web search, isolated browser, external MCP servers) remain controlled separately by config and `ToolPolicyEngine`.

@@ -35,7 +35,7 @@ flowchart TD
 | `capri/core/policy.py` | Fail-closed `ToolPolicyEngine` (`safe` / `ask` / `trusted`), symlink/path canonicalization, sensitive file guards, and read-only shell allowlisting. |
 | `capri/core/mcp_client.py` | Event-loop-independent stdio JSON-RPC 2.0 MCP client with strict allowlisted environment isolation, 1 MiB frame limits, tag-breakout escaping, and secret redaction. |
 | `capri/core/sessions.py` | Local SQLite conversation store (`sessions.db`) with FTS5 full-text search, cross-session recall, and session export/backup hooks. |
-| `capri/core/persona.py` & `capri/core/emotions.py` | Persona prompt construction, emotional state persistence (`emotion.json`), and relationship/mood modulation. |
+| `capri/core/prompts.py` & `capri/core/emotions.py` | Persona prompt construction, emotional state persistence (`emotion.json`), and relationship/mood modulation. |
 | `capri/core/focus_timer.py` | Pomodoro / Focus Timer controller (`OFF -> 25m -> 50m -> 15m`) coordinating avatar aura progress and silence gating. |
 | `capri/core/watch_runner.py` | Native TTY command wrapper (`capri --watch "<cmd>"`) propagating exit codes and signaling avatar/desktop/TTS alerts on completion. |
 | `capri/core/systemd_service.py` | Optional `systemd --user` unit generator/status/installer for `capri-avatar.service` (supports both user overrides and `/usr/lib/systemd/user` packaged units). |
@@ -46,7 +46,7 @@ flowchart TD
 | `capri/ui/overlay.py` & `capri/ui/sprite_view.py` | Native `zwlr_layer_shell_v1` click-through desktop avatar, 2D physics/perching, multi-monitor hotplug handling, audio-reactive projection aura, and `--systemd` reconnect lifecycle. |
 | `capri/ui/client.py` | Lightweight Unix-socket IPC client talking to `capri-avatar` (`/tmp/capri_avatar.sock`). |
 | `capri/ui/i18n.py` | Bilingual `RU` / `EN` UI dictionary, pluralization, and live language propagation. |
-| `capri/voice/tts.py` | Streaming TTS 3.0 (`SentenceStreamSplitter`, sliding prefetch window, WAV/PyAV/MP3 envelope extraction, 25 Hz audio-level dispatcher, Fish/Edge/ElevenLabs/Gemini/Silero/XTTS backends). |
+| `capri/voice/tts.py` | Streaming TTS 3.0 (`SentenceStreamSplitter`, sliding prefetch window, WAV/PyAV/MP3 envelope extraction, 25 Hz audio-level dispatcher; active UI engines: Fish Audio, ElevenLabs, Edge TTS; legacy Gemini/Silero/XTTS synthesis paths retained for backward `config.yaml` compatibility). |
 | `capri/voice/stt.py`, `wake.py`, `ptt.py`, `barge_in.py`, `pipewire.py` | Speech recognition (Groq Whisper / local faster-whisper), optional Vosk wake-word, optional evdev Push-to-Talk, hands-free barge-in, and PipeWire WebRTC AEC / Join Voice routing. |
 | `capri/tools/` | Registry and built-in tools (`shell.py`, `fs.py`, `web.py`, `browser.py`, `screen.py`, `media.py`, `desktop.py`, `memory.py`, `timers.py`). |
 | `packaging/arch/PKGBUILD` | Arch / CachyOS package build installing wheel entrypoints, `.desktop` file, dual license notices, and `/usr/lib/systemd/user/capri-avatar.service`. |

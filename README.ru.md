@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-v3.6.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.6.1)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-290%2F290%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-291%2F291%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
@@ -74,7 +74,7 @@ capri --service install --start
 > **Куда уходят данные при работе:** локальная база сессий, неподтверждённые кандидаты памяти (`pending_memory.json`) и `.env` никогда не покидают ваш ПК. При использовании облачных сервисов передаются только данные для выбранной функции:
 > - **Облачный LLM:** системный промпт, реплики текущего окна контекста и явно подтверждённые факты памяти;
 > - **Облачный STT** (`Groq Whisper`): аудиофрагмент речи для распознавания;
-> - **Облачный TTS** (`Fish Audio`, `ElevenLabs`, `Edge`, `Gemini TTS`): текст ответа для озвучивания;
+> - **Облачный TTS** (`Fish Audio`, `ElevenLabs`, `Edge`): текст ответа для озвучивания *(устаревшие ветки `gemini` / `silero` / `xtts` в `capri/voice/tts.py` скрыты из UI и оставлены исключительно для обратной совместимости со старыми `config.yaml`)*;
 > - **Облачный Vision** (`Gemini Vision`): скриншот экрана или прикреплённое изображение.
 >
 > При подключении локального LLM-сервера (Ollama / LM Studio) и локальных движков STT/TTS генерация ответов и речь обрабатываются на вашем устройстве; опциональные сетевые инструменты (веб-поиск, изолированный браузер, внешние MCP-серверы) не отключаются этим автоматически и контролируются отдельно через настройки и `ToolPolicyEngine`.

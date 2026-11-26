@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-During the Open Beta phase, security fixes are applied to the latest `3.5.x` release on `main`:
+During the Open Beta phase, security fixes are applied to the latest `3.6.x` release on `main`:
 
 | Version | Supported |
 | ------- | --------- |
-| `3.5.x` | Yes |
-| `< 3.5.0` | No (please upgrade via `./setup.sh --upgrade`) |
+| `3.6.x` | Yes |
+| `< 3.6.0` | No (please upgrade via `./setup.sh --upgrade`) |
 
 ## Reporting a Vulnerability (Private Disclosure)
 
@@ -37,8 +37,9 @@ All tool executions pass through `ToolPolicyEngine` (fail-closed by default when
 - **`TRUSTED`:** Auto-allows non-destructive desktop controls (`focus_window`, `media_control`, `set_volume`); direct memory mutations, shell commands outside the read-only allowlist, file writes, process termination, sensitive file access, and all `mcp__*` tools **still** require explicit confirmation.
 - **Forbidden patterns:** Destructive/privilege-escalation commands (e.g. `rm -rf /`, `mkfs`, `dd of=/dev/sd*`, `curl ... | sh`, `shutdown`, fork bombs) are unconditionally denied in all modes.
 
-### 2. Isolated Browser & SSRF Protection
+### 2. Isolated Browser, MCP Subprocess Isolation & SSRF Protection
 - `capri_browser_*` and `fetch_web_page` enforce strict `http://`/`https://` scheme validation, single-DNS IP pinning (`_SSRFGuardedNetworkBackend`), per-hop redirect checking, and an ephemeral `_SSRFGuardProxy` for headless Chromium (`use_js=True`) blocking loopback, RFC1918 private networks, link-local/cloud metadata (`169.254.169.254`), CGNAT, and obfuscated IP literals.
+- External stdio MCP servers (`capri/core/mcp_client.py`) run with a minimal allowlisted base environment (`MCP_ALLOWED_BASE_ENV_KEYS` + `LC_*`/`XDG_*`, rejecting proxy URLs with embedded `user:pass@` credentials) plus only variables explicitly declared in `mcp.servers[*].env`, preventing Capri's `.env` API keys from leaking to third-party MCP processes.
 - Untrusted web pages and MCP outputs are wrapped in explicit untrusted delimiters (`<web_page_content untrusted="true">`, `<mcp_tool_output untrusted="true">`) with closing-tag neutralization to mitigate prompt-injection tag breakout.
 
 ### 3. Secrets, Memory Gate & Local Privacy
@@ -52,6 +53,6 @@ All tool executions pass through `ToolPolicyEngine` (fail-closed by default when
 - When you configure cloud providers, only the payload required for each active capability is transmitted to your selected API endpoint:
   - **Cloud LLM** (`DeepSeek`, `Groq`, `Gemini`, `SambaNova`, `OpenRouter`, `OpenAI`): system prompt, active conversation window, and user-confirmed memory facts (never unapproved `pending_memory.json` entries or `.env`).
   - **Cloud STT** (`Groq Whisper`): recorded audio snippet for speech-to-text transcription.
-  - **Cloud TTS** (`Fish Audio`, `ElevenLabs`, `Edge`, `Gemini TTS`): assistant reply text for speech synthesis.
+  - **Cloud TTS** (`Fish Audio`, `ElevenLabs`, `Edge`; legacy `gemini` synthesis path in `capri/voice/tts.py` is retained only for backward compatibility if explicitly set in `config.yaml`): assistant reply text for speech synthesis.
   - **Cloud Vision** (`Gemini Vision`): desktop screenshot or user-attached image.
 - Using a local OpenAI-compatible server (e.g. Ollama / LM Studio) with local STT/TTS keeps chat and voice inference on-device; optional network features such as web search/fetch, the isolated browser, and external MCP servers are independent and remain governed by configuration and `ToolPolicyEngine`.
