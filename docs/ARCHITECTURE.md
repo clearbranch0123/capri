@@ -20,7 +20,7 @@ flowchart TD
     Policy --> Tools["Built-in Tools (shell, fs, web, browser, screen, media, desktop, timers)"]
     Policy --> MCP["MCP Stdio Manager (JSON-RPC 2.0, allowlisted env)"]
 
-    Agent -- "Unix Socket (/tmp/capri_avatar.sock)" --> Avatar["Desktop Avatar Overlay (capri-avatar)"]
+    Agent -- "Unix Socket ($XDG_RUNTIME_DIR/capri/avatar.sock)" --> Avatar["Desktop Avatar Overlay (capri-avatar)"]
     Avatar -- "zwlr_layer_shell_v1 + Niri/Hyprland IPC" --> WM["Wayland Compositor (Niri / Hyprland / wlroots)"]
 ```
 
@@ -41,10 +41,10 @@ flowchart TD
 | `capri/core/systemd_service.py` | Optional `systemd --user` unit generator/status/installer for `capri-avatar.service` (supports both user overrides and `/usr/lib/systemd/user` packaged units). |
 | `capri/core/doctor.py` | Non-mutating self-diagnostics (`/doctor`) and secret-redacted `/bugreport` generation. |
 | `capri/core/compositor.py` & `capri/core/wm_rules.py` | Wayland compositor detection (Niri, Hyprland, wlroots), window geometry/workspace IPC, and safe `.capri.bak` rule installation. |
-| `capri/ui/cyberdeck.py` | Primary Qt 6 Cyberdeck window, session management, settings, slash commands, Memory Workbench, and async worker supervision. |
+| `capri/ui/cyberdeck.py` & `capri/ui/deck/*` | Primary Qt 6 Cyberdeck window plus modular deck subpackages (`chat_card.py`, `workers.py`, `dialogs.py`, `settings_dialog.py`), slash commands, and session orchestration. |
 | `capri/ui/quick_ask.py` | Compact floating Quick Ask Bar (`capri-deck --ask`) with sticky workspace pinning, screenshot/voice capture, and Cyberdeck handoff. |
-| `capri/ui/overlay.py` & `capri/ui/sprite_view.py` | Native `zwlr_layer_shell_v1` click-through desktop avatar, 2D physics/perching, multi-monitor hotplug handling, audio-reactive projection aura, and `--systemd` reconnect lifecycle. |
-| `capri/ui/client.py` | Lightweight Unix-socket IPC client talking to `capri-avatar` (`/tmp/capri_avatar.sock`). |
+| `capri/ui/overlay.py` & `capri/ui/sprite_view.py` | Native `zwlr_layer_shell_v1` click-through desktop avatar, lazy `QImage` sprite-sheet decoding, adaptive 15/60 Hz redraw cadence, 2D physics/perching, and `--systemd` reconnect lifecycle. |
+| `capri/ui/client.py` & `avatar_ipc.py` | Versioned (`v: 1` NDJSON) per-user Unix-socket IPC contract (`$XDG_RUNTIME_DIR/capri/avatar.sock`, `0700`/`0600`, `SO_PEERCRED`, `O_NOFOLLOW`, `flock` singleton guard, stream framing) with transitional legacy fallback. |
 | `capri/ui/i18n.py` | Bilingual `RU` / `EN` UI dictionary, pluralization, and live language propagation. |
 | `capri/voice/tts.py` | Streaming TTS 3.0 (`SentenceStreamSplitter`, sliding prefetch window, WAV/PyAV/MP3 envelope extraction, 25 Hz audio-level dispatcher; active UI engines: Fish Audio, ElevenLabs, Edge TTS; legacy Gemini/Silero/XTTS synthesis paths retained for backward `config.yaml` compatibility). |
 | `capri/voice/stt.py`, `wake.py`, `ptt.py`, `barge_in.py`, `pipewire.py` | Speech recognition (Groq Whisper / local faster-whisper), optional Vosk wake-word, optional evdev Push-to-Talk, hands-free barge-in, and PipeWire WebRTC AEC / Join Voice routing. |
@@ -63,7 +63,7 @@ flowchart TD
   - `emotion.json`, `context.json`, `initiative.json`: Companion state and awareness metadata.
   - `sprites/`: Optional drop-in custom sprite overrides.
 - **Local IPC:**
-  - `/tmp/capri_avatar.sock` & `/tmp/capri_avatar.pid`: JSON-lines IPC between Cyberdeck/CLI and the standalone `capri-avatar` process (avatar state, speech/mic audio levels, focus timer sync, config sync).
+  - `$XDG_RUNTIME_DIR/capri/avatar.sock` (`0600` in a `0700` dir) & `avatar.pid`: versioned (`v: 1`) NDJSON IPC between Cyberdeck/CLI and the standalone `capri-avatar` process (avatar state, speech/mic audio levels, focus timer sync, config sync), with transitional client fallback to legacy `/tmp/capri_avatar.sock`.
 - **Optional `systemd --user` lifecycle:**
   - `capri-avatar --mode 2d --systemd` waits for a live Wayland Unix socket (`WAYLAND_DISPLAY` / `XDG_RUNTIME_DIR/wayland-*`) and exits with code `1` if the compositor closes the layer surface so `Restart=on-failure` cleanly reattaches after compositor restarts.
 

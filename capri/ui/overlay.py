@@ -31,8 +31,20 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtQuickWidgets import QQuickWidget
 from .avatar_awareness import AvatarAwarenessEngine
+from .avatar_ipc import (
+    AvatarIPCStreamBuffer,
+    AvatarSingletonLock,
+    decode_avatar_ipc_line,
+    enforce_owner_only_file_mode,
+    ensure_avatar_runtime_dir,
+    get_avatar_lock_path,
+    get_avatar_pid_path,
+    get_avatar_socket_path,
+    read_owned_pid_file,
+    safe_unlink_owned_path,
+    write_owned_pid_file,
+)
 from .avatar_brain import AvatarLifeBrain, BrainAction
 from .avatar_physics import AvatarPhysics2D, PhysicsState, PhysicsStepResult
 from .avatar_popover import CapriAvatarQuickPopover
@@ -62,8 +74,22 @@ from ..core.presence import (
     resolve_avatar_auto_pose,
 )
 
-SOCKET_PATH = "/tmp/capri_avatar.sock"
-PID_PATH = "/tmp/capri_avatar.pid"
+_DEFAULT_SOCKET_SENTINEL = get_avatar_socket_path()
+_DEFAULT_PID_SENTINEL = get_avatar_pid_path()
+SOCKET_PATH = _DEFAULT_SOCKET_SENTINEL
+PID_PATH = _DEFAULT_PID_SENTINEL
+
+
+def _resolve_server_socket_path() -> str:
+    if SOCKET_PATH != _DEFAULT_SOCKET_SENTINEL:
+        return SOCKET_PATH
+    return get_avatar_socket_path()
+
+
+def _resolve_server_pid_path() -> str:
+    if PID_PATH != _DEFAULT_PID_SENTINEL:
+        return PID_PATH
+    return get_avatar_pid_path()
 
 
 class AvatarState:
@@ -699,6 +725,7 @@ class CapriAvatarWidget(QWidget):
             self.canvas_v2.wake_up()
         if self.layer_stage is not None:
             self.layer_stage.set_full_input()
+        self._sync_anim_timer_interval()
         self._render_layer_frame()
 
     def _on_layer_pointer_move(self, px: float, py: float, ts: float) -> None:
@@ -885,159 +912,210 @@ class CapriAvatarWidget(QWidget):
         self.canvas_v2.set_reduced_motion(self.reduced_motion)
         self.stack.addWidget(self.canvas_v2)
 
-        # 2. Классический круглый HUD-радар v0.1.0 (для любителей ретро)
-        self.canvas_classic = Avatar2DCanvas(self, size=240)
-        self.stack.addWidget(self.canvas_classic)
+        # 2. Классический круглый HUD-радар v0.1.0 (ленивая инициализация только для mode=classic/circle)
+        self.canvas_classic = None
 
-        # 3. 3D QML View
-        self.quick_3d = QQuickWidget(self)
-        self.quick_3d.setClearColor(QColor(0, 0, 0, 0))
-        self.quick_3d.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-        from ..core.resources import get_asset_path
-        qml_path = get_asset_path("3d", "qml", "Avatar3D.qml")
-        if qml_path.exists():
-            self.quick_3d.setSource(QUrl.fromLocalFile(str(qml_path)))
-        self.stack.addWidget(self.quick_3d)
+        # 3. 3D QML View (lazily initialized only when --mode 3d is requested)
+        self.quick_3d = None
 
         self.set_mode(self.mode)
+
+    def _ensure_canvas_classic(self):
+        if self.canvas_classic is not None:
+            return self.canvas_classic
+        classic = Avatar2DCanvas(self, size=240)
+        self.stack.addWidget(classic)
+        self.canvas_classic = classic
+        return classic
+
+    def _ensure_quick_3d(self):
+        if self.quick_3d is not None:
+            return self.quick_3d
+        from PySide6.QtQuickWidgets import QQuickWidget
+        from ..core.resources import get_asset_path
+
+        quick = QQuickWidget(self)
+        quick.setClearColor(QColor(0, 0, 0, 0))
+        quick.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        qml_path = get_asset_path("3d", "qml", "Avatar3D.qml")
+        if qml_path.exists():
+            quick.setSource(QUrl.fromLocalFile(str(qml_path)))
+        self.stack.addWidget(quick)
+        self.quick_3d = quick
+        return quick
 
     def set_mode(self, mode: str):
         self.mode = mode
         if mode == "3d":
-            self.stack.setCurrentWidget(self.quick_3d)
+            quick = self._ensure_quick_3d()
+            self.stack.setCurrentWidget(quick)
             self._sync_3d_properties()
         elif mode in ("classic", "circle"):
-            self.stack.setCurrentWidget(self.canvas_classic)
-            self.canvas_classic.update()
+            classic = self._ensure_canvas_classic()
+            self.stack.setCurrentWidget(classic)
+            classic.update()
         else:
             self.stack.setCurrentWidget(self.canvas_v2)
             self.canvas_v2.update()
 
     def _sync_3d_properties(self):
+        if self.quick_3d is None:
+            return
         root_obj = self.quick_3d.rootObject()
         if root_obj:
             root_obj.setProperty("avatarState", self.state)
             root_obj.setProperty("captionText", self.caption_text)
 
     def _init_ipc_server(self):
-        if os.path.exists(SOCKET_PATH):
-            try:
-                os.unlink(SOCKET_PATH)
-            except OSError:
-                pass
+        self._ipc_buffers: dict[int, AvatarIPCStreamBuffer] = {}
+        sock_path = _resolve_server_socket_path()
+        self._active_socket_path = sock_path
+        parent_dir = Path(sock_path).parent
+        if parent_dir == Path(get_avatar_socket_path()).parent:
+            ensure_avatar_runtime_dir(parent_dir)
+        else:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            enforce_owner_only_file_mode(parent_dir, 0o700)
+        safe_unlink_owned_path(sock_path)
         self.server = QLocalServer(self)
+        try:
+            self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+        except Exception:
+            pass
         self.server.newConnection.connect(self._handle_new_connection)
-        self.server.listen(SOCKET_PATH)
+        if self.server.listen(sock_path):
+            enforce_owner_only_file_mode(sock_path, 0o600)
 
     def _handle_new_connection(self):
         client = self.server.nextPendingConnection()
         if not client:
             return
-        client.readyRead.connect(lambda: self._read_client_data(client))
+        self._ipc_buffers[id(client)] = AvatarIPCStreamBuffer()
+        client.readyRead.connect(lambda c=client: self._read_client_data(c))
+        client.disconnected.connect(lambda c=client: self._on_client_disconnected(c))
+
+    def _on_client_disconnected(self, client: QLocalSocket):
+        buf = self._ipc_buffers.pop(id(client), None)
+        if buf is not None:
+            for data in buf.flush_eof():
+                try:
+                    self._dispatch_ipc_message(data)
+                except Exception:
+                    pass
+        try:
+            client.deleteLater()
+        except Exception:
+            pass
 
     def _read_client_data(self, client: QLocalSocket):
-        raw = client.readAll().data().decode("utf-8", errors="ignore")
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        chunk = bytes(client.readAll().data())
+        if not chunk:
+            return
+        buf = self._ipc_buffers.get(id(client))
+        if buf is None:
+            buf = AvatarIPCStreamBuffer()
+            self._ipc_buffers[id(client)] = buf
+        for data in buf.feed(chunk):
             try:
-                data = json.loads(line)
-                if data.get("type") == "locomotion" or data.get("action") in ("come", "stay", "follow", "home", "glide", "teleport"):
-                    self.locomotion.handle_command(data)
-                    continue
-                if data.get("type") == "audio_level":
-                    if hasattr(self, "canvas_v2"):
-                        self.canvas_v2.set_audio_level(
-                            float(data.get("level", 0.0)),
-                            source=str(data.get("source", "mic")),
-                        )
-                    continue
-                if data.get("type") == "power_saver":
-                    if "override" in data:
-                        self.game_mode_override = data["override"]
-                    if "active" in data:
-                        self.apply_game_mode(bool(data["active"]), reason=str(data.get("reason", "ipc")))
-                    elif self.game_mode_override is None:
-                        self.apply_game_mode(False, reason="auto_reset")
-                    continue
-                if data.get("type") == "config_sync":
-                    if "auto_avatar_poses" in data:
-                        self.auto_poses_enabled = bool(data["auto_avatar_poses"])
-                    if "game_mode_enabled" in data:
-                        self.game_mode_enabled = bool(data["game_mode_enabled"])
-                        if not self.game_mode_enabled and self.game_mode_override is None:
-                            self.apply_game_mode(False, reason="config_disabled")
-                    if "avatar_reactions_enabled" in data:
-                        self.reactions_enabled = bool(data["avatar_reactions_enabled"])
-                    if "reduced_motion" in data:
-                        self.reduced_motion = bool(data["reduced_motion"])
-                        self.physics.set_reduced_motion(self.reduced_motion)
-                        if self.reduced_motion:
-                            self._cancel_autonomous_walk()
-                        if hasattr(self, "canvas_v2"):
-                            self.canvas_v2.set_reduced_motion(self.reduced_motion)
-                    if "physics_enabled" in data or "avatar_physics_enabled" in data:
-                        val = data.get("physics_enabled", data.get("avatar_physics_enabled", True))
-                        self.physics_enabled = bool(val)
-                        self.physics.set_physics_enabled(self.physics_enabled)
-                    if "autonomous_life_enabled" in data or "avatar_autonomous_life" in data:
-                        val = data.get("autonomous_life_enabled", data.get("avatar_autonomous_life", True))
-                        self.autonomous_life_enabled = bool(val)
-                        self.brain.set_enabled(self.autonomous_life_enabled)
-                        if not self.autonomous_life_enabled:
-                            self._cancel_autonomous_walk()
-                    if "companion_mode" in data:
-                        self.companion_mode = str(data.get("companion_mode") or "normal").strip().lower()
-                    if "user_name" in data and str(data.get("user_name") or "").strip():
-                        self.awareness.user_name = str(data["user_name"]).strip()
-                    if "ui_language" in data:
-                        ui_lang = "en" if str(data.get("ui_language") or "").strip().lower().startswith("en") else "ru"
-                        self.ui_language = ui_lang
-                        os.environ["CAPRI_UI_LANG"] = ui_lang
-                        if getattr(self, "quick_popover", None) is not None:
-                            self.quick_popover.set_language(ui_lang)
-                    self._sync_auto_pose()
-                    continue
-                if data.get("type") == "focus_timer":
-                    act = str(data.get("action") or "cycle").strip().lower()
-                    if act == "stop":
-                        self._stop_focus_timer()
-                    elif act == "start":
-                        if "seconds" in data and data["seconds"] is not None:
-                            self._start_focus_timer_seconds(float(data["seconds"]))
-                        else:
-                            self._start_focus_timer(float(data.get("minutes", 25.0)))
-                    else:
-                        self._cycle_focus_timer()
-                    continue
-                new_state = data.get("state", self.state)
-                text = data.get("text", "")
-                meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-                if "mode" in data:
-                    self.set_mode(data["mode"])
-                req_pose = data.get("pose") or meta.get("pose")
-                if req_pose and hasattr(self, "canvas_v2"):
-                    p_str = str(req_pose).strip().lower()
-                    if p_str in ("normal", "wake", "auto"):
-                        self.manual_pose_override = None
-                        self.canvas_v2.set_pose("wake" if p_str == "wake" else "normal")
-                    elif p_str in ("perch", "perch_music", "lounge", "walk", "sleep"):
-                        self.manual_pose_override = p_str
-                        self.canvas_v2.set_pose(p_str)
-                if meta and hasattr(self, "canvas_v2"):
-                    if "mood" in meta:
-                        self.canvas_v2.set_mood(str(meta["mood"]))
-                    if "mouth_envelope" in meta and isinstance(meta["mouth_envelope"], list):
-                        self.canvas_v2.set_lip_sync_envelope(meta["mouth_envelope"])
-                self.set_state(new_state, text)
+                self._dispatch_ipc_message(data)
             except Exception:
                 pass
+
+    def _dispatch_ipc_message(self, data: dict):
+        if data.get("type") == "locomotion" or data.get("action") in ("come", "stay", "follow", "home", "glide", "teleport"):
+            self.locomotion.handle_command(data)
+            return
+        if data.get("type") == "audio_level":
+            if hasattr(self, "canvas_v2"):
+                self.canvas_v2.set_audio_level(
+                    float(data.get("level", 0.0)),
+                    source=str(data.get("source", "mic")),
+                )
+            self._sync_anim_timer_interval()
+            return
+        if data.get("type") == "power_saver":
+            if "override" in data:
+                self.game_mode_override = data["override"]
+            if "active" in data:
+                self.apply_game_mode(bool(data["active"]), reason=str(data.get("reason", "ipc")))
+            elif self.game_mode_override is None:
+                self.apply_game_mode(False, reason="auto_reset")
+            return
+        if data.get("type") == "config_sync":
+            if "auto_avatar_poses" in data:
+                self.auto_poses_enabled = bool(data["auto_avatar_poses"])
+            if "game_mode_enabled" in data:
+                self.game_mode_enabled = bool(data["game_mode_enabled"])
+                if not self.game_mode_enabled and self.game_mode_override is None:
+                    self.apply_game_mode(False, reason="config_disabled")
+            if "avatar_reactions_enabled" in data:
+                self.reactions_enabled = bool(data["avatar_reactions_enabled"])
+            if "reduced_motion" in data:
+                self.reduced_motion = bool(data["reduced_motion"])
+                self.physics.set_reduced_motion(self.reduced_motion)
+                if self.reduced_motion:
+                    self._cancel_autonomous_walk()
+                if hasattr(self, "canvas_v2"):
+                    self.canvas_v2.set_reduced_motion(self.reduced_motion)
+            if "physics_enabled" in data or "avatar_physics_enabled" in data:
+                val = data.get("physics_enabled", data.get("avatar_physics_enabled", True))
+                self.physics_enabled = bool(val)
+                self.physics.set_physics_enabled(self.physics_enabled)
+            if "autonomous_life_enabled" in data or "avatar_autonomous_life" in data:
+                val = data.get("autonomous_life_enabled", data.get("avatar_autonomous_life", True))
+                self.autonomous_life_enabled = bool(val)
+                self.brain.set_enabled(self.autonomous_life_enabled)
+                if not self.autonomous_life_enabled:
+                    self._cancel_autonomous_walk()
+            if "companion_mode" in data:
+                self.companion_mode = str(data.get("companion_mode") or "normal").strip().lower()
+            if "user_name" in data and str(data.get("user_name") or "").strip():
+                self.awareness.user_name = str(data["user_name"]).strip()
+            if "ui_language" in data:
+                ui_lang = "en" if str(data.get("ui_language") or "").strip().lower().startswith("en") else "ru"
+                self.ui_language = ui_lang
+                os.environ["CAPRI_UI_LANG"] = ui_lang
+                if getattr(self, "quick_popover", None) is not None:
+                    self.quick_popover.set_language(ui_lang)
+            self._sync_auto_pose()
+            return
+        if data.get("type") == "focus_timer":
+            act = str(data.get("action") or "cycle").strip().lower()
+            if act == "stop":
+                self._stop_focus_timer()
+            elif act == "start":
+                if "seconds" in data and data["seconds"] is not None:
+                    self._start_focus_timer_seconds(float(data["seconds"]))
+                else:
+                    self._start_focus_timer(float(data.get("minutes", 25.0)))
+            else:
+                self._cycle_focus_timer()
+            return
+        new_state = data.get("state", self.state)
+        text = data.get("text", "")
+        meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        if "mode" in data:
+            self.set_mode(data["mode"])
+        req_pose = data.get("pose") or meta.get("pose")
+        if req_pose and hasattr(self, "canvas_v2"):
+            p_str = str(req_pose).strip().lower()
+            if p_str in ("normal", "wake", "auto"):
+                self.manual_pose_override = None
+                self.canvas_v2.set_pose("wake" if p_str == "wake" else "normal")
+            elif p_str in ("perch", "perch_music", "lounge", "walk", "sleep"):
+                self.manual_pose_override = p_str
+                self.canvas_v2.set_pose(p_str)
+        if meta and hasattr(self, "canvas_v2"):
+            if "mood" in meta:
+                self.canvas_v2.set_mood(str(meta["mood"]))
+            if "mouth_envelope" in meta and isinstance(meta["mouth_envelope"], list):
+                self.canvas_v2.set_lip_sync_envelope(meta["mouth_envelope"])
+        self.set_state(new_state, text)
 
     def _init_timers(self):
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self._update_animation)
-        self.anim_timer.start(16)
+        self._sync_anim_timer_interval()
 
         # MPRIS + Game Mode / Power Saver фоновый опрос (отключён в offscreen-тестах)
         self.presence_timer = QTimer(self)
@@ -1134,20 +1212,17 @@ class CapriAvatarWidget(QWidget):
             self._cancel_autonomous_walk()
 
         if effective:
-            if self.state == AvatarState.IDLE:
-                self.anim_timer.stop()
-            else:
-                self.anim_timer.start(250)
             self.caption_text = ""
             self.caption_timer = 0
             self.setWindowOpacity(0.15)
             if hasattr(self, "canvas_v2"):
                 self.canvas_v2.set_pose("sleep")
                 self.canvas_v2.update()
+            self._sync_anim_timer_interval()
             if self.using_layer_stage:
                 self._render_layer_frame()
         else:
-            self.anim_timer.start(16)
+            self._sync_anim_timer_interval()
             self.setWindowOpacity(1.0)
             if hasattr(self, "canvas_v2"):
                 self.canvas_v2.wake_up()
@@ -1227,6 +1302,7 @@ class CapriAvatarWidget(QWidget):
             clean_txt = (clipped if len(clipped) >= 40 else clean_txt[:89].rstrip()) + "…"
         self.caption_text = clean_txt
         self.caption_timer = max(60, int(ticks))
+        self._sync_anim_timer_interval()
         if hasattr(self, "canvas_v2"):
             self.canvas_v2.update()
 
@@ -1250,10 +1326,7 @@ class CapriAvatarWidget(QWidget):
             if hasattr(self, "awareness") and self.awareness is not None:
                 self.awareness.note_user_activity(now_act)
         if self.power_saver_active:
-            if state == AvatarState.IDLE:
-                self.anim_timer.stop()
-            else:
-                self.anim_timer.start(250)
+            self._sync_anim_timer_interval()
         if text:
             clean_txt = " ".join(text.replace("\n", " ").split()).strip()
             if len(clean_txt) > 92:
@@ -1270,9 +1343,11 @@ class CapriAvatarWidget(QWidget):
         elif state == AvatarState.IDLE:
             self._sync_auto_pose()
 
+        self._sync_anim_timer_interval()
+
         if self.mode == "3d":
             self._sync_3d_properties()
-        elif self.mode in ("classic", "circle"):
+        elif self.mode in ("classic", "circle") and self.canvas_classic is not None:
             self.canvas_classic.update()
         else:
             self.canvas_v2.update()
@@ -1336,23 +1411,72 @@ class CapriAvatarWidget(QWidget):
                 vy=res.vy,
             )
 
+    def _is_physics_busy(self) -> bool:
+        return (
+            self.physics.state != PhysicsState.IDLE
+            or abs(self.physics.tilt_deg) > 0.05
+            or abs(self.physics.scale_x - 1.0) > 0.005
+            or abs(self.physics.scale_y - 1.0) > 0.005
+            or abs(self.physics.canvas_offset_y) > 0.1
+            or self.physics.impact_ripple > 0.005
+        )
+
+    def _desired_anim_interval_ms(self) -> Optional[int]:
+        """Adaptive refresh cadence: 60 Hz during active motion/speech, calm 15 Hz in idle."""
+        if self.power_saver_active:
+            return None if self.state == AvatarState.IDLE else 250
+        if (
+            self.state != AvatarState.IDLE
+            or self._is_physics_busy()
+            or self._auto_walk_target is not None
+            or self.caption_timer > 0
+        ):
+            return 16
+        canvas = getattr(self, "canvas_v2", None)
+        if canvas is not None:
+            if (
+                canvas.blink_active
+                or canvas.glitch_active
+                or canvas.waking_active
+                or canvas.dance_active
+                or canvas.audio_energy > 0.01
+                or canvas.pose == "walk"
+            ):
+                return 16
+            if canvas.pose in ("perch", "perch_music"):
+                return 33
+            if self.reduced_motion:
+                return 250
+            if canvas.pose == "sleep":
+                return 120
+        if self.reduced_motion:
+            return 250
+        return 64
+
+    def _sync_anim_timer_interval(self) -> None:
+        timer = getattr(self, "anim_timer", None)
+        if timer is None:
+            return
+        target = self._desired_anim_interval_ms()
+        if target is None:
+            if timer.isActive():
+                timer.stop()
+            return
+        if not timer.isActive() or timer.interval() != target:
+            timer.start(target)
+
     def _update_animation(self):
         now_mono = time.monotonic()
-        dt = max(0.001, min(0.05, now_mono - self._last_anim_ts))
+        raw_dt = max(0.001, min(0.30, now_mono - self._last_anim_ts))
+        dt = min(0.05, raw_dt)
+        anim_ticks = max(1, min(16, int(round(raw_dt * 60.0))))
         self._last_anim_ts = now_mono
 
-        self.pulse_phase = (self.pulse_phase + 0.05) % (2 * math.pi)
+        self.pulse_phase = (self.pulse_phase + 0.05 * anim_ticks) % (2 * math.pi)
 
-        # 60 Hz visual + physics tick (0 IPC calls in Wayland layer-stage mode!)
+        # 60 Hz visual + physics tick when active (0 IPC calls in Wayland layer-stage mode!)
         if not self.power_saver_active:
-            phys_busy = (
-                self.physics.state != PhysicsState.IDLE
-                or abs(self.physics.tilt_deg) > 0.05
-                or abs(self.physics.scale_x - 1.0) > 0.005
-                or abs(self.physics.scale_y - 1.0) > 0.005
-                or abs(self.physics.canvas_offset_y) > 0.1
-                or self.physics.impact_ripple > 0.005
-            )
+            phys_busy = self._is_physics_busy()
             if phys_busy:
                 if self.using_layer_stage:
                     mon = self._stage_monitor()
@@ -1390,11 +1514,11 @@ class CapriAvatarWidget(QWidget):
             elif self._auto_walk_target is not None:
                 self._step_autonomous_walk(dt)
 
-        # Продвижение спрайтовой анимации v0.2.0
-        self.canvas_v2.advance_animation()
+        # Продвижение спрайтовой анимации v0.2.0 (сохраняет реальную скорость при адаптивном интервале)
+        self.canvas_v2.advance_animation(step_ticks=anim_ticks)
 
         if self.caption_timer > 0:
-            self.caption_timer -= 1
+            self.caption_timer = max(0, self.caption_timer - anim_ticks)
             if self.caption_timer == 0:
                 self.caption_text = ""
                 if self.state == AvatarState.PLAYFUL:
@@ -1402,9 +1526,11 @@ class CapriAvatarWidget(QWidget):
                 if self.mode == "3d":
                     self._sync_3d_properties()
 
+        self._sync_anim_timer_interval()
+
         if self.using_layer_stage:
             self._render_layer_frame()
-        elif self.mode in ("classic", "circle"):
+        elif self.mode in ("classic", "circle") and self.canvas_classic is not None:
             self.canvas_classic.update()
 
     def trigger_wall_splat_reaction(self):
@@ -2186,16 +2312,14 @@ class CapriAvatarWidget(QWidget):
             self.anim_timer.stop()
         if hasattr(self, "locomotion") and self.locomotion and getattr(self.locomotion, "observer", None):
             self.locomotion.observer.stop()
-        if os.path.exists(SOCKET_PATH):
+        if hasattr(self, "server") and self.server:
             try:
-                os.unlink(SOCKET_PATH)
-            except OSError:
+                self.server.close()
+            except Exception:
                 pass
-        if os.path.exists(PID_PATH):
-            try:
-                os.unlink(PID_PATH)
-            except OSError:
-                pass
+        sock_path = getattr(self, "_active_socket_path", None) or _resolve_server_socket_path()
+        safe_unlink_owned_path(sock_path)
+        safe_unlink_owned_path(_resolve_server_pid_path())
         event.accept()
 
 
@@ -2270,30 +2394,40 @@ def launch_avatar():
         if wait_for_wayland_socket(timeout_s=wait_sec) is None:
             sys.exit(1)
 
-    # 1. Защита от дублей: если уже запущен активный PID, проверяем его жизнь
-    if os.path.exists(PID_PATH):
+    sock_path = _resolve_server_socket_path()
+    pid_path = _resolve_server_pid_path()
+    default_dir = Path(get_avatar_socket_path()).parent
+    for target_p in (Path(sock_path).parent, Path(pid_path).parent):
+        if target_p == default_dir:
+            ensure_avatar_runtime_dir(target_p)
+        else:
+            target_p.mkdir(parents=True, exist_ok=True)
+            enforce_owner_only_file_mode(target_p, 0o700)
+
+    # 1. Атомарная защита от гонки одновременного запуска через flock (удерживается до завершения процесса)
+    singleton_lock = AvatarSingletonLock(get_avatar_lock_path(pid_path))
+    if not singleton_lock.acquire():
+        sys.exit(0)
+
+    # Проверяем оставшийся PID от предыдущего (например, pre-flock) процесса безопасно (O_NOFOLLOW + fstat)
+    old_pid = read_owned_pid_file(pid_path)
+    if old_pid is not None and old_pid != os.getpid():
         try:
-            with open(PID_PATH, "r") as f:
-                old_pid = int(f.read().strip())
             os.kill(old_pid, 0)
-            # Старый процесс жив. Проверяем, существует ли активный сокет.
-            # Если сокет удален, значит прошлый процесс подвис в фоне — принудительно гасим его.
-            if not os.path.exists(SOCKET_PATH):
+            if not os.path.exists(sock_path):
                 try:
                     os.kill(old_pid, 15)
                 except OSError:
                     pass
             else:
+                singleton_lock.release()
                 sys.exit(0)
-        except (OSError, ValueError):
-            # Старый процесс мертв, перезаписываем PID
+        except OSError:
             pass
 
-    try:
-        with open(PID_PATH, "w") as f:
-            f.write(str(os.getpid()))
-    except Exception:
-        pass
+    if not write_owned_pid_file(pid_path, os.getpid()):
+        singleton_lock.release()
+        sys.exit(1)
 
     # 2. Привязка к смерти родителя на уровне ядра Linux (только если родитель явно задан)
     if args.parent_pid:
@@ -2304,16 +2438,9 @@ def launch_avatar():
             pass
 
     def _sig_handler(signum, frame):
-        if os.path.exists(PID_PATH):
-            try:
-                os.unlink(PID_PATH)
-            except OSError:
-                pass
-        if os.path.exists(SOCKET_PATH):
-            try:
-                os.unlink(SOCKET_PATH)
-            except OSError:
-                pass
+        safe_unlink_owned_path(pid_path)
+        safe_unlink_owned_path(sock_path)
+        singleton_lock.release()
         sys.exit(0)
 
     try:
@@ -2332,21 +2459,9 @@ def launch_avatar():
     ret = app.exec()
     if getattr(widget, "_compositor_reconnect_exit", False) and ret == 0:
         ret = 1
-    if os.path.exists(PID_PATH):
-        try:
-            os.unlink(PID_PATH)
-        except OSError:
-            pass
-    if os.path.exists(SOCKET_PATH):
-        try:
-            os.unlink(SOCKET_PATH)
-        except OSError:
-            pass
-    if os.path.exists(SOCKET_PATH):
-        try:
-            os.unlink(SOCKET_PATH)
-        except OSError:
-            pass
+    safe_unlink_owned_path(pid_path)
+    safe_unlink_owned_path(sock_path)
+    singleton_lock.release()
     # Принудительный выход для гарантированного завершения фоновых потоков QQuickWidget/OpenGL
     os._exit(ret)
 

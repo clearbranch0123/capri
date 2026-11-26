@@ -5,6 +5,25 @@
 
 ---
 
+## [3.7.0] — 2026-11-26 (Startup & Avatar Memory Boost, Modular Cyberdeck UI & Hardened XDG IPC)
+
+Инженерный релиз производительности, модульности UI и защиты межпроцессного обмена: холодный старт `capri-avatar` ускорен в **2.7×**, потребление оперативной памяти фонового аватара снижено более чем вдвое (**-53% PSS / -57% VmRSS**), монолитный `cyberdeck.py` разделён на пакет `capri/ui/deck/`, а IPC аватара переведён на версионированный контракт в `$XDG_RUNTIME_DIR/capri/`.
+
+### ⚡ Производительность старта, памяти и рендера на Wayland
+- **Ленивые экспорты пакетов и отложенный `QtQuick3D` (`capri/__init__.py`, `capri/core/__init__.py`, `capri/voice/__init__.py`, `capri/ui/__init__.py`, `capri/ui/overlay.py`):** публичные реэкспорты (`from capri import CapriAgent, AppConfig, ...`) переведены на PEP 562 `__getattr__`, а `QQuickWidget` (`Avatar3D.qml`) инициализируется только при `--mode 3d`. Холодный импорт `capri` сокращён с `774 мс` до **`18 мс`**, а 2D-аватар больше не поднимает фоновые потоки OpenGL/QML (`29 -> 13` потоков).
+- **Ленивое декодирование спрайт-листов через `QImage` (`capri/ui/sprite_view.py`, `capri/ui/overlay.py`):** на старте декодируются только базовые листы `idle` и `blink` (20 кадров вместо >200); тяжёлые листы (`perch` 60f, `perch_music` 60f, `sleep`, `wake`, `dance`, `glitch`, `mouth`) и ретро-режим `canvas_classic` подгружаются по требованию за `1–23 мс` с мгновенным освобождением исходных буферов. Живой замер на Wayland/Niri: старт до первого кадра **`923 -> 339 мс`**, фоновый **VmRSS `285 -> 124 МБ`**, **PSS `230 -> 109 МБ`**.
+- **Адаптивный таймер перерисовки (`capri/ui/overlay.py`, `capri/ui/sprite_view.py`):** в спокойном `IDLE` частота обновления снижается до `~15.6 Гц` (`64 мс`, во сне `120 мс`, в `reduced_motion` — `250 мс`), снижая холостую нагрузку CPU втрое (`~0.98%`), и мгновенно возвращается на честные **`60 Гц` (`16 мс`)** при любом движении, перетаскивании, речи, моргании или глитче без изменения скорости анимаций.
+
+### 🧩 Модульная архитектура Cyberdeck (`capri/ui/deck/`)
+- **Декомпозиция монолита `capri/ui/cyberdeck.py` (`8 916 -> 5 218` строк):** компоненты разделены по зонам ответственности в `capri/ui/deck/` — `chat_card.py` (`ChatMessageCard`), `workers.py` (`QThread`-воркеры и live-проверка API), `dialogs.py` (мастер первого запуска, сессии, Memory Workbench, подтверждение инструментов, сброс, changelog) и `settings_dialog.py` (`CapriProviderSettingsDialog`) с полным сохранением всех публичных реэкспортов `capri.ui.cyberdeck`.
+
+### 🔒 Защищённый версионированный IPC аватара (`$XDG_RUNTIME_DIR/capri/`)
+- **Контракт `v: 1` NDJSON и изоляция сокета (`capri/ui/avatar_ipc.py`, `capri/ui/client.py`, `capri/ui/overlay.py`, `capri/cli.py`):** сокет `avatar.sock`, `avatar.pid` и singleton-лок `avatar.lock` перенесены из общего `/tmp` в приватный каталог пользователя `$XDG_RUNTIME_DIR/capri/` (`0700`) с правами файлов `0600`.
+- **Защита от гонок, подмены и фрагментации потока:** добавлены неблокирующий `flock`-лок запуска (`AvatarSingletonLock`), атомарное чтение/запись PID через `O_NOFOLLOW` + `fstat` (`S_ISREG` и проверка `UID`), валидация типа/владельца сокета и `SO_PEERCRED` перед отправкой команд (включая переходный fallback на legacy `/tmp/capri_avatar.sock`), а также потоковый буфер `AvatarIPCStreamBuffer` (до 64 КиБ/строку) на каждое соединение.
+- **Верификация релиза v3.7.0:** **305/305 passed, 0 warnings** (`test_performance_optimizations_v37.py`, `test_avatar_ipc_v37.py` + весь базовый набор).
+
+---
+
 ## [3.6.1] — 2026-11-26 (Keyless Ollama / LM Studio, Provider Persistence & BYOV Voice Polish)
 
 Сервисный релиз полировки локальных провайдеров, сохранения ключей/моделей, настроек голоса и витрины перед широким анонсом.

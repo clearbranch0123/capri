@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QBrush,
     QFont,
     QFontMetrics,
+    QImage,
     QPixmap,
     QRadialGradient,
     QPolygonF,
@@ -68,24 +69,10 @@ class AvatarV2Canvas(QWidget):
         self.target_h = target_h
         self._user_sprites_dir: Path = Path(user_sprites_dir) if user_sprites_dir is not None else USER_SPRITES_DIR
 
-        # Базовые спрайт-листы
-        self.idle_frames: list[QPixmap] = []
-        self.blink_frames: list[QPixmap] = []
-        self.blink_glitch_frames: list[QPixmap] = []
-        self.mouth_frames: list[QPixmap] = []
-        self.glitch_frames: list[QPixmap] = []
-        self.dance_frames: list[QPixmap] = []
-        self.sleep_frames: list[QPixmap] = []
-        self.wake_frames: list[QPixmap] = []
-        self.perch_frames: list[QPixmap] = []
-        self.perch_music_frames: list[QPixmap] = []
-
-        # Опциональные drop-in слоты v3.3 (автонарезка или poses.json, с фоллбэком на базовые)
-        self.drag_frames: list[QPixmap] = []
-        self.fall_frames: list[QPixmap] = []
-        self.splat_frames: list[QPixmap] = []
-        self.lounge_frames: list[QPixmap] = []
-        self.walk_frames: list[QPixmap] = []
+        # Ленивый кэш спрайт-листов (на старте грузятся только `idle` и `blink`,
+        # остальные позы/состояния подгружаются по первому обращению)
+        self._sprite_cache: dict[str, list[QPixmap]] = {}
+        self._pose_manifest: dict[str, dict] = {}
         self._slot_tick_divs: dict[str, int] = {}
 
         self._load_all_sprites()
@@ -180,7 +167,7 @@ class AvatarV2Canvas(QWidget):
         """Auto-slice a drop-in horizontal sprite strip (supports manifest hints or zero-config PNGs)."""
         if path is None or not path.exists():
             return []
-        src = QPixmap(str(path))
+        src = QImage(str(path))
         if src.isNull() or src.width() <= 0 or src.height() <= 0:
             return []
         img_w, img_h = src.width(), src.height()
@@ -212,7 +199,8 @@ class AvatarV2Canvas(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            frames.append(scaled)
+            frames.append(QPixmap.fromImage(scaled))
+        del src
         return frames
 
     @staticmethod
@@ -242,27 +230,78 @@ class AvatarV2Canvas(QWidget):
                 pass
         return self._slice_auto_sheet(path, frames_hint=f_hint, cell_w_hint=cw_hint)
 
-    def _load_all_sprites(self):
-        self._slot_tick_divs.clear()
-        self.idle_frames = self._slice_sheet(SPRITES_DIR / "idle.png", 16, cell_w=240)
-        self.blink_frames = self._slice_sheet(SPRITES_DIR / "blink.png", 4, cell_w=240)
-        self.blink_glitch_frames = self._slice_sheet(SPRITES_DIR / "blink_glitch.png", 4, cell_w=240)
-        self.mouth_frames = self._slice_sheet(SPRITES_DIR / "mouth.png", 5, cell_w=240)
-        self.glitch_frames = self._slice_sheet(SPRITES_DIR / "glitch.png", 10, cell_w=240)
-        self.dance_frames = self._slice_sheet(SPRITES_DIR / "dance.png", 16, cell_w=240)
-        self.sleep_frames = self._slice_sheet(SPRITES_DIR / "sleep.png", 16, cell_w=240)
-        self.wake_frames = self._slice_sheet(SPRITES_DIR / "wake.png", 13, cell_w=240)
+    _CORE_SHEET_SPECS: dict[str, tuple[str, int, int]] = {
+        "idle": ("idle.png", 16, 240),
+        "blink": ("blink.png", 4, 240),
+        "blink_glitch": ("blink_glitch.png", 4, 240),
+        "mouth": ("mouth.png", 5, 240),
+        "glitch": ("glitch.png", 10, 240),
+        "dance": ("dance.png", 16, 240),
+        "sleep": ("sleep.png", 16, 240),
+        "wake": ("wake.png", 13, 240),
         # perch & perch_music sheets are 11760x384 = 60 frames @ 196px wide
-        self.perch_frames = self._slice_sheet(SPRITES_DIR / "perch.png", 60, cell_w=196)
-        self.perch_music_frames = self._slice_sheet(SPRITES_DIR / "perch_music.png", 60, cell_w=196)
+        "perch": ("perch.png", 60, 196),
+        "perch_music": ("perch_music.png", 60, 196),
+    }
 
-        # Optional drop-in custom sheets (seamlessly fall back to bundled sprites when absent)
-        manifest = self._load_pose_manifest()
-        self.drag_frames = self._load_optional_slot("drag", "drag.png", manifest)
-        self.fall_frames = self._load_optional_slot("fall", "fall.png", manifest)
-        self.splat_frames = self._load_optional_slot("splat", "splat.png", manifest)
-        self.lounge_frames = self._load_optional_slot("lounge", "lounge.png", manifest)
-        self.walk_frames = self._load_optional_slot("walk", "walk.png", manifest)
+    _OPTIONAL_SHEET_FILES: dict[str, str] = {
+        "drag": "drag.png",
+        "fall": "fall.png",
+        "splat": "splat.png",
+        "lounge": "lounge.png",
+        "walk": "walk.png",
+    }
+
+    def _get_slot(self, slot_name: str) -> list[QPixmap]:
+        cached = self._sprite_cache.get(slot_name)
+        if cached is not None:
+            return cached
+        if slot_name in self._CORE_SHEET_SPECS:
+            fname, count, cw = self._CORE_SHEET_SPECS[slot_name]
+            frames = self._slice_sheet(SPRITES_DIR / fname, count, cell_w=cw)
+        elif slot_name in self._OPTIONAL_SHEET_FILES:
+            frames = self._load_optional_slot(
+                slot_name,
+                self._OPTIONAL_SHEET_FILES[slot_name],
+                self._pose_manifest,
+            )
+        else:
+            frames = []
+        self._sprite_cache[slot_name] = frames
+        return frames
+
+    def _set_slot(self, slot_name: str, frames: list[QPixmap]) -> None:
+        self._sprite_cache[slot_name] = list(frames)
+
+    idle_frames = property(lambda self: self._get_slot("idle"), lambda self, v: self._set_slot("idle", v))
+    blink_frames = property(lambda self: self._get_slot("blink"), lambda self, v: self._set_slot("blink", v))
+    blink_glitch_frames = property(lambda self: self._get_slot("blink_glitch"), lambda self, v: self._set_slot("blink_glitch", v))
+    mouth_frames = property(lambda self: self._get_slot("mouth"), lambda self, v: self._set_slot("mouth", v))
+    glitch_frames = property(lambda self: self._get_slot("glitch"), lambda self, v: self._set_slot("glitch", v))
+    dance_frames = property(lambda self: self._get_slot("dance"), lambda self, v: self._set_slot("dance", v))
+    sleep_frames = property(lambda self: self._get_slot("sleep"), lambda self, v: self._set_slot("sleep", v))
+    wake_frames = property(lambda self: self._get_slot("wake"), lambda self, v: self._set_slot("wake", v))
+    perch_frames = property(lambda self: self._get_slot("perch"), lambda self, v: self._set_slot("perch", v))
+    perch_music_frames = property(lambda self: self._get_slot("perch_music"), lambda self, v: self._set_slot("perch_music", v))
+    drag_frames = property(lambda self: self._get_slot("drag"), lambda self, v: self._set_slot("drag", v))
+    fall_frames = property(lambda self: self._get_slot("fall"), lambda self, v: self._set_slot("fall", v))
+    splat_frames = property(lambda self: self._get_slot("splat"), lambda self, v: self._set_slot("splat", v))
+    lounge_frames = property(lambda self: self._get_slot("lounge"), lambda self, v: self._set_slot("lounge", v))
+    walk_frames = property(lambda self: self._get_slot("walk"), lambda self, v: self._set_slot("walk", v))
+
+    def _load_all_sprites(self):
+        self._sprite_cache.clear()
+        self._slot_tick_divs.clear()
+        self._pose_manifest = self._load_pose_manifest()
+        # Preload only the always-visible startup sheets (`idle` + `blink`);
+        # heavy sheets (`perch` 60f, `perch_music` 60f, `sleep`, `wake`, `dance`, `glitch`, custom)
+        # decode lazily on first state transition.
+        self._get_slot("idle")
+        self._get_slot("blink")
+
+    def get_cached_sprite_slots(self) -> set[str]:
+        """Return names of sprite slots currently decoded in RAM (without triggering lazy loads)."""
+        return set(self._sprite_cache.keys())
 
     def reload_sprites(self, user_sprites_dir: Optional[Path] = None) -> dict[str, int]:
         if user_sprites_dir is not None:
@@ -288,7 +327,7 @@ class AvatarV2Canvas(QWidget):
     def _slice_sheet(self, path: Path, count: int, cell_w: Optional[int] = None) -> list[QPixmap]:
         if not path.exists():
             return []
-        src = QPixmap(str(path))
+        src = QImage(str(path))
         if src.isNull():
             return []
         cw = cell_w or self.CELL_W
@@ -302,7 +341,8 @@ class AvatarV2Canvas(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            frames.append(scaled)
+            frames.append(QPixmap.fromImage(scaled))
+        del src
         return frames
 
     def set_mood(self, mood: str):
@@ -417,15 +457,15 @@ class AvatarV2Canvas(QWidget):
         else:
             self.dance_active = active
 
-    def advance_animation(self):
-        self.tick_count += 1
+    def advance_animation(self, step_ticks: int = 1):
+        ticks = max(1, int(step_ticks))
+        prev_tick = self.tick_count
+        self.tick_count += ticks
         state = getattr(self.host, "state", "idle")
 
         # Hover speed slows gently when sleeping
         phase_step = 0.022 if self.pose == "sleep" else 0.045
-        self.hover_phase += phase_step
-        if self.hover_phase > math.tau:
-            self.hover_phase -= math.tau
+        self.hover_phase = (self.hover_phase + phase_step * ticks) % math.tau
 
         # Wake immediately on any active state
         if state != "idle":
@@ -433,34 +473,37 @@ class AvatarV2Canvas(QWidget):
             if self.pose == "sleep":
                 self.wake_up()
         else:
-            self.idle_ticks += 1
+            self.idle_ticks += ticks
             if (
                 self.pose == "normal"
                 and not self.dance_active
-                and self.sleep_frames
                 and self.idle_ticks >= self.IDLE_SLEEP_TICKS
+                and self.sleep_frames
             ):
                 self.pose = "sleep"
 
+        step_3 = (self.tick_count // 3) - (prev_tick // 3)
+        step_4 = (self.tick_count // 4) - (prev_tick // 4)
+
         # Wake-up transition animation
         if self.waking_active:
-            if self.tick_count % 3 == 0:
-                self.wake_frame += 1
+            if step_3 > 0:
+                self.wake_frame += step_3
                 if self.wake_frame >= len(self.wake_frames):
                     self.waking_active = False
                     self.wake_frame = 0
 
         # 1. Логика моргания (обычное или киберпанк-глитч в зависимости от настроения)
         if not self.blink_active:
-            self.blink_timer -= 1
+            self.blink_timer -= ticks
             if self.blink_timer <= 0:
                 self.blink_active = True
                 self.blink_frame = 0
                 glitch_prob = 0.55 if self.mood in ("sarcastic", "annoyed") else 0.18
-                self.blink_is_glitch = bool(self.blink_glitch_frames) and (random.random() < glitch_prob)
+                self.blink_is_glitch = (random.random() < glitch_prob) and bool(self.blink_glitch_frames)
         else:
-            if self.tick_count % 3 == 0:
-                self.blink_frame += 1
+            if step_3 > 0:
+                self.blink_frame += step_3
                 frames_ref = self.blink_glitch_frames if self.blink_is_glitch else self.blink_frames
                 if self.blink_frame >= len(frames_ref):
                     self.blink_active = False
@@ -469,18 +512,18 @@ class AvatarV2Canvas(QWidget):
 
         # 2. Логика глитча
         if self.glitch_active:
-            if self.tick_count % 3 == 0:
-                self.glitch_frame += 1
+            if step_3 > 0:
+                self.glitch_frame += step_3
                 if self.glitch_frame >= len(self.glitch_frames):
                     self.glitch_active = False
 
         # 3. Синхронизация липсинка (~15 FPS при 60 Гц таймере = шаг каждые 4 тика)
         if state == "speaking" and self.mouth_frames:
-            if self.tick_count % 4 == 0:
+            if step_4 > 0:
                 if self.mouth_envelope:
                     if self.mouth_env_pos < len(self.mouth_envelope):
                         self.current_mouth_idx = self.mouth_envelope[self.mouth_env_pos]
-                        self.mouth_env_pos += 1
+                        self.mouth_env_pos = min(len(self.mouth_envelope), self.mouth_env_pos + step_4)
                     else:
                         # Subtle tail cadence if audio slightly outlasts estimated envelope
                         self.current_mouth_idx = 1 if (self.tick_count // 4) % 2 == 0 else 0

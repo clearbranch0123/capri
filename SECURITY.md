@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-During the Open Beta phase, security fixes are applied to the latest `3.6.x` release on `main`:
+During the Open Beta phase, security fixes are applied to the latest `3.7.x` release on `main`:
 
 | Version | Supported |
 | ------- | --------- |
-| `3.6.x` | Yes |
-| `< 3.6.0` | No (please upgrade via `./setup.sh --upgrade`) |
+| `3.7.x` | Yes |
+| `< 3.7.0` | No (please upgrade via `./setup.sh --upgrade`) |
 
 ## Reporting a Vulnerability (Private Disclosure)
 
@@ -44,6 +44,7 @@ All tool executions pass through `ToolPolicyEngine` (fail-closed by default when
 
 ### 3. Secrets, Memory Gate & Local Privacy
 - API keys are stored locally in `~/.config/capri/.env` (or `$XDG_CONFIG_HOME/capri/.env`) with `0600` permissions and are scrubbed from `config.yaml` on save.
+- Local desktop avatar IPC uses a per-user runtime directory (`$XDG_RUNTIME_DIR/capri`, mode `0700`) with owner-only socket/PID/lock files (`0600`), non-blocking `flock` singleton startup locking, `O_NOFOLLOW` + `fstat` UID checks, `SO_PEERCRED` peer verification, and bounded versioned NDJSON (`v: 1`, max 64 KiB/line) stream framing.
 - LLM-proposed memory facts are staged in an isolated `pending_memory.json` (`0600`) queue and never enter `memory.json` or system prompts without explicit user approval. A dedicated secret/credential filter blocks passwords, API keys, tokens, PINs, and private keys at proposal, edit, approval, tool, and slash-command boundaries without logging secret values.
 - Rolling session summaries (`<historical_context untrusted="true">`) and cross-session associative recall (`<past_session_recall untrusted="true">`) redact API keys, tokens, passwords, passphrases (including quoted and natural-language EN/RU phrasing), and escape closing tags before entering prompts.
 - `/bugreport` and runtime error surfaces redact API keys, Bearer tokens, JWTs, URL query/basic-auth credentials, MCP env secrets, and local `/home/<user>` paths, and never include `sessions.db`, `memory.json`, `pending_memory.json`, `emotion.json`, or `.env`.

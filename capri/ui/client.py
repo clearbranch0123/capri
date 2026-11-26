@@ -9,10 +9,69 @@ from __future__ import annotations
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from typing import Optional
 
-SOCKET_PATH = "/tmp/capri_avatar.sock"
+from .avatar_ipc import (
+    encode_avatar_ipc_message,
+    get_avatar_socket_candidates,
+    get_avatar_socket_path,
+    is_owned_unix_socket,
+    peer_socket_matches_current_uid,
+    safe_unlink_owned_path,
+)
+
+# Public module-level attribute preserved for backward compatibility and test isolation.
+# When left untouched, client calls dynamically resolve `$XDG_RUNTIME_DIR/capri/avatar.sock`
+# with legacy `/tmp/capri_avatar.sock` fallback during transition.
+_DEFAULT_SOCKET_SENTINEL = get_avatar_socket_path()
+SOCKET_PATH = _DEFAULT_SOCKET_SENTINEL
+
+
+def _resolve_avatar_socket_candidates() -> list[str]:
+    if SOCKET_PATH != _DEFAULT_SOCKET_SENTINEL:
+        return [SOCKET_PATH]
+    return get_avatar_socket_candidates(include_legacy=True)
+
+
+def _send_avatar_ipc(
+    payload: dict,
+    *,
+    timeout: float = 0.05,
+    retries: int = 1,
+    cleanup_stale: bool = False,
+) -> bool:
+    try:
+        raw_data = encode_avatar_ipc_message(payload)
+    except Exception:
+        return False
+
+    candidates = _resolve_avatar_socket_candidates()
+    for _ in range(max(1, int(retries))):
+        if any(is_owned_unix_socket(c) for c in candidates):
+            break
+        if retries > 1:
+            time.sleep(0.06)
+
+    for target in candidates:
+        if not is_owned_unix_socket(target):
+            continue
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(target)
+                if not peer_socket_matches_current_uid(sock):
+                    continue
+                sock.sendall(raw_data)
+                return True
+        except (ConnectionRefusedError, FileNotFoundError):
+            if cleanup_stale:
+                safe_unlink_owned_path(target)
+            continue
+        except Exception:
+            continue
+    return False
 
 
 def get_cyberdeck_ipc_socket_path() -> str:
@@ -53,51 +112,21 @@ def send_cyberdeck_command(
 
 def notify_avatar(state: str, text: str = "", metadata: Optional[dict] = None) -> bool:
     """
-    Отправляет команду аватару через локальный UNIX-сокет.
+    Отправляет команду аватару через локальный UNIX-сокет (`v: 1` NDJSON).
     state: "idle" | "listening" | "thinking" | "speaking" | "playful"
     text: подпись/субтитры или название выполняемого инструмента
     """
-    if not Path(SOCKET_PATH).exists():
-        return False
-
     payload = {
         "state": state,
         "text": text,
         "metadata": metadata or {},
     }
-    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.05)  # Не блокируем основной цикл
-            sock.connect(SOCKET_PATH)
-            sock.sendall(raw_data)
-            return True
-    except Exception:
-        return False
+    return _send_avatar_ipc(payload, timeout=0.05)
 
 
 def set_avatar_mode(mode: str) -> bool:
     """Переключает режим аватара ('2d' или '3d')."""
-    if not Path(SOCKET_PATH).exists():
-        return False
-
-    payload = {"mode": mode}
-    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.05)
-            sock.connect(SOCKET_PATH)
-            sock.sendall(raw_data)
-            return True
-    except (ConnectionRefusedError, FileNotFoundError):
-        try:
-            Path(SOCKET_PATH).unlink(missing_ok=True)
-        except Exception:
-            pass
-        return False
-    except Exception:
-        return False
+    return _send_avatar_ipc({"mode": mode}, timeout=0.05, cleanup_stale=True)
 
 
 def notify_avatar_locomotion(action: str, retries: int = 4, **kwargs) -> bool:
@@ -106,50 +135,17 @@ def notify_avatar_locomotion(action: str, retries: int = 4, **kwargs) -> bool:
     action: "come" | "stay" | "follow" | "home" | "glide" | "teleport"
     kwargs: target_x, target_y, enabled, etc.
     """
-    import time
-    for _ in range(max(1, retries)):
-        if Path(SOCKET_PATH).exists():
-            break
-        time.sleep(0.06)
-
-    if not Path(SOCKET_PATH).exists():
-        return False
-
     payload = {
         "type": "locomotion",
         "action": action,
         **kwargs,
     }
-    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.12)
-            sock.connect(SOCKET_PATH)
-            sock.sendall(raw_data)
-            return True
-    except (ConnectionRefusedError, FileNotFoundError):
-        try:
-            Path(SOCKET_PATH).unlink(missing_ok=True)
-        except Exception:
-            pass
-        return False
-    except Exception:
-        return False
+    return _send_avatar_ipc(payload, timeout=0.12, retries=retries, cleanup_stale=True)
 
 
 def send_avatar_control(payload: dict) -> bool:
     """Send arbitrary control payload (power_saver, config_sync, pose, etc.) to running avatar."""
-    if not Path(SOCKET_PATH).exists():
-        return False
-    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.08)
-            sock.connect(SOCKET_PATH)
-            sock.sendall(raw_data)
-            return True
-    except Exception:
-        return False
+    return _send_avatar_ipc(payload, timeout=0.08)
 
 
 def notify_avatar_audio_level(level: float, source: str = "mic") -> bool:
@@ -157,18 +153,6 @@ def notify_avatar_audio_level(level: float, source: str = "mic") -> bool:
     Send lightweight normalized audio energy (0.0..1.0) to the desktop avatar for
     real-time voice-reactive aura and equalizer rendering.
     """
-    if not Path(SOCKET_PATH).exists():
-        return False
     clamped = max(0.0, min(1.0, float(level)))
     payload = {"type": "audio_level", "level": round(clamped, 3), "source": str(source or "mic")}
-    raw_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.025)
-            sock.connect(SOCKET_PATH)
-            sock.sendall(raw_data)
-            return True
-    except Exception:
-        return False
-
-
+    return _send_avatar_ipc(payload, timeout=0.025)

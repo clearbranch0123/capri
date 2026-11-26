@@ -1,6 +1,6 @@
 # Maintainer: D <clearbranch0123@users.noreply.github.com>
 pkgname=capri-companion
-pkgver=3.6.1
+pkgver=3.7.0
 pkgrel=1
 pkgdesc="Cyberpunk local-first AI companion for Wayland (Niri / Hyprland / wlroots) & PipeWire"
 arch=('any')
@@ -40,8 +40,8 @@ optdepends=(
     'chromium: optional JS rendering (--js) in the isolated browser'
 )
 source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-# Pinned to the published v3.6.1 tag archive SHA-256 (refresh via `updpkgsums` / `makepkg -g` after tagging a new release).
-sha256sums=('7c2e212d2f8292993eda3b1e48c2532f5e995c6d5597698f8b038ac2f8b3715b')
+# Pinned immediately on main after tagging v${pkgver} (refresh via `updpkgsums` / `makepkg -g`).
+sha256sums=('SKIP')
 
 build() {
     cd "${srcdir}/capri-${pkgver}"

@@ -42,26 +42,26 @@ def kill_avatar():
                 pass
     avatar_proc = None
 
-    pid_path = "/tmp/capri_avatar.pid"
-    if os.path.exists(pid_path):
-        try:
-            with open(pid_path, "r") as f:
-                pid = int(f.read().strip())
-            if pid != os.getpid():
-                os.kill(pid, signal.SIGTERM)
-        except Exception:
-            pass
-        try:
-            os.unlink(pid_path)
-        except OSError:
-            pass
+    from .ui.avatar_ipc import (
+        LEGACY_AVATAR_PID_PATH,
+        LEGACY_AVATAR_SOCKET_PATH,
+        get_avatar_pid_path,
+        get_avatar_socket_path,
+        read_owned_pid_file,
+        safe_unlink_owned_path,
+    )
 
-    for p in ("/tmp/capri_avatar.sock", "/tmp/capri_avatar.pid"):
-        try:
-            if os.path.exists(p):
-                os.unlink(p)
-        except OSError:
-            pass
+    for pid_path in (get_avatar_pid_path(), LEGACY_AVATAR_PID_PATH):
+        pid = read_owned_pid_file(pid_path)
+        if pid is not None and pid != os.getpid():
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        safe_unlink_owned_path(pid_path)
+
+    for p in (get_avatar_socket_path(), get_avatar_pid_path(), LEGACY_AVATAR_SOCKET_PATH, LEGACY_AVATAR_PID_PATH):
+        safe_unlink_owned_path(p)
 
 
 def spawn_avatar(mode: str = "2d") -> bool:
