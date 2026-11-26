@@ -14,9 +14,14 @@ Security model (Closed Beta):
     (both OS-level AND Capri internal state such as memory/context/timers/initiative/avatar) are denied.
   - `ask` (default): read-only & Capri-internal companion state allowed; OS-mutating actions and
     sensitive config/secret file reads ask user confirmation.
-  - `trusted`: read-only, companion state & non-destructive desktop controls (`focus_window`,
-    `media_control`, `set_volume`) allowed; shell, file-write, kill, destructive actions and
-    sensitive config/secret reads STILL require confirmation (no silent bypass).
+  - `trusted`: read-only, companion state, normal desktop controls (`focus_window`,
+    `media_control`, `set_volume`, `open_app`, `open_url`, `close_app`, `niri_action`),
+    normal non-sensitive file writes, and a conservative allowlist of non-destructive
+    shell utilities/pipelines (`|`, `&&`, zero redirects/substitutions/interpreters/code-exec flags)
+    are auto-allowed; script interpreters (`python3 -c`, `bash -c`, `node -e`, etc.),
+    destructive/privileged shell commands, redirects, sensitive paths (`.env`, `~/.ssh`,
+    `~/.bashrc`, `~/.config/niri`, `/etc`), `kill_process`, direct memory mutations,
+    `capri_voice_call`, and external `mcp__*` tools STILL require explicit confirmation.
 """
 
 from __future__ import annotations
@@ -202,6 +207,170 @@ SAFE_PACMAN_FLAGS: frozenset[str] = frozenset({
     "-Si",
 })
 
+# Conservative allowlist of additional non-interpreter utilities permitted in TRUSTED mode
+# (never includes script interpreters like python/bash/sh/node/perl/ruby/awk/sed/xargs/env).
+TRUSTED_EXTRA_SHELL_BINARIES: frozenset[str] = frozenset({
+    "grep",
+    "egrep",
+    "fgrep",
+    "uniq",
+    "cut",
+    "tr",
+    "diff",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "tree",
+    "mkdir",
+    "touch",
+    "cp",
+    "ss",
+    "ping",
+})
+
+# Strict read-only subcommands for compositor & system query tools in TRUSTED mode
+SAFE_NIRI_MSG_SUBCOMMANDS: frozenset[str] = frozenset({
+    "windows",
+    "workspaces",
+    "outputs",
+    "focused-window",
+    "focused-output",
+    "layers",
+    "version",
+    "keyboard-layouts",
+    "overview-state",
+})
+SAFE_HYPRCTL_SUBCOMMANDS: frozenset[str] = frozenset({
+    "clients",
+    "activewindow",
+    "workspaces",
+    "activeworkspace",
+    "monitors",
+    "layers",
+    "version",
+    "devices",
+    "binds",
+})
+SAFE_WPCTL_SUBCOMMANDS: frozenset[str] = frozenset({"status", "inspect", "get-volume", "set-volume", "set-mute"})
+SAFE_PACTL_SUBCOMMANDS: frozenset[str] = frozenset({
+    "info",
+    "list",
+    "get-default-sink",
+    "get-default-source",
+    "get-sink-volume",
+    "get-sink-mute",
+    "set-sink-volume",
+    "set-sink-mute",
+    "set-source-mute",
+})
+SAFE_PLAYERCTL_SUBCOMMANDS: frozenset[str] = frozenset({
+    "status",
+    "metadata",
+    "play",
+    "pause",
+    "play-pause",
+    "next",
+    "previous",
+    "stop",
+    "volume",
+    "position",
+})
+
+# Dangerous flags for `find` / `fd` / `curl` / `rg` / `sort` / `journalctl`
+_DANGEROUS_RG_FLAGS: frozenset[str] = frozenset({"--pre", "--pre-glob"})
+_DANGEROUS_SORT_FLAGS: frozenset[str] = frozenset({"-o", "--output", "--compress-program"})
+_DANGEROUS_JOURNALCTL_FLAGS: frozenset[str] = frozenset({
+    "--rotate",
+    "--vacuum-size",
+    "--vacuum-time",
+    "--vacuum-files",
+    "--flush",
+    "--relinquish-var",
+})
+# Explicit allowlist of safe window/workspace compositor actions auto-allowed via `niri_action` in TRUSTED mode
+SAFE_TRUSTED_COMPOSITOR_ACTIONS: frozenset[str] = frozenset({
+    "focus-workspace-down",
+    "focus-workspace-up",
+    "focus-workspace-previous",
+    "focus-column-left",
+    "focus-column-right",
+    "focus-column-first",
+    "focus-column-last",
+    "focus-window-down",
+    "focus-window-up",
+    "focus-monitor-left",
+    "focus-monitor-right",
+    "focus-monitor-up",
+    "focus-monitor-down",
+    "focus-monitor-next",
+    "focus-monitor-previous",
+    "toggle-overview",
+    "open-overview",
+    "close-overview",
+    "fullscreen-window",
+    "maximize-column",
+    "center-column",
+    "center-visible-columns",
+    "toggle-window-floating",
+    "switch-focus-between-floating-and-tiling",
+    "move-column-left",
+    "move-column-right",
+    "move-window-down",
+    "move-window-up",
+    "move-column-to-workspace-down",
+    "move-column-to-workspace-up",
+})
+
+
+def is_safe_trusted_compositor_action(action: str) -> bool:
+    """Return True ONLY for explicitly allowlisted non-destructive Niri/Hyprland navigation/layout actions."""
+    parts = (action or "").strip().lower().split()
+    if not parts:
+        return False
+    if len(parts) == 1:
+        return parts[0] in SAFE_TRUSTED_COMPOSITOR_ACTIONS
+    if len(parts) == 2 and parts[0] in ("focus-workspace", "move-column-to-workspace"):
+        return parts[1].isdigit() and 1 <= int(parts[1]) <= 20
+    return False
+
+# Dangerous flags for `find` / `fd` / `curl` that can execute code or write/upload files
+_DANGEROUS_FIND_FLAGS: frozenset[str] = frozenset({
+    "-exec",
+    "-execdir",
+    "-ok",
+    "-okdir",
+    "-delete",
+    "-fls",
+    "-fprint",
+    "-fprint0",
+    "-fprintf",
+})
+_DANGEROUS_FD_FLAGS: frozenset[str] = frozenset({"-x", "-X", "--exec", "--exec-batch"})
+_DANGEROUS_CURL_FLAGS: frozenset[str] = frozenset({
+    "-o",
+    "-O",
+    "--output",
+    "--remote-name",
+    "--remote-name-all",
+    "-K",
+    "--config",
+    "-d",
+    "--data",
+    "--data-raw",
+    "--data-binary",
+    "--data-urlencode",
+    "-F",
+    "--form",
+    "-T",
+    "--upload-file",
+    "-X",
+    "--request",
+})
+# Metacharacters forbidden even in TRUSTED auto-allowed shell commands
+# (blocks redirects, subshells, command/variable substitution, semicolons, backgrounding, newlines)
+_TRUSTED_FORBIDDEN_META_RE = re.compile(r"[;><`$\n\r()]")
+
 SENSITIVE_PATH_FRAGMENTS: tuple[str, ...] = (
     "/.env",
     "/.ssh/",
@@ -377,6 +546,182 @@ def is_forbidden_shell_command(command: str) -> bool:
     return False
 
 
+def _command_touches_sensitive_path(command: str) -> bool:
+    """Return True if any shell token or raw path fragment references a sensitive secret/system path."""
+    cmd_clean = (command or "").strip()
+    if not cmd_clean:
+        return False
+    low_cmd = cmd_clean.lower()
+    if _touches_sensitive_path(cmd_clean):
+        return True
+    for dotfile in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".xprofile"):
+        if dotfile in low_cmd:
+            return True
+    for sub in SENSITIVE_HOME_WRITE_SUBPATHS:
+        if sub in low_cmd:
+            return True
+    try:
+        tokens = shlex.split(cmd_clean)
+    except ValueError:
+        tokens = cmd_clean.split()
+    for tok in tokens:
+        cleaned = tok.strip("\"'`()[]{};,&|<>")
+        if not cleaned:
+            continue
+        if _touches_sensitive_path(cleaned) or _is_sensitive_write_target(cleaned):
+            return True
+        # Handle flag=path forms (e.g. --env-file=.env, -f=/etc/shadow)
+        if "=" in cleaned:
+            rhs = cleaned.split("=", 1)[1].strip("\"'")
+            if rhs and (_touches_sensitive_path(rhs) or _is_sensitive_write_target(rhs)):
+                return True
+    return False
+
+
+def _is_trusted_shell_segment(tokens: list[str]) -> bool:
+    """Validate one pipeline/chain segment against the conservative TRUSTED allowlist."""
+    if not tokens:
+        return False
+    exe = os.path.basename(tokens[0]).lower()
+    args = tokens[1:]
+
+    for arg in args:
+        if _touches_sensitive_path(arg) or _is_sensitive_write_target(arg):
+            return False
+        if "=" in arg:
+            rhs = arg.split("=", 1)[1].strip("\"'")
+            if rhs and (_touches_sensitive_path(rhs) or _is_sensitive_write_target(rhs)):
+                return False
+
+    if exe == "git":
+        if not args:
+            return False
+        for a in args:
+            if a.split("=", 1)[0] in _DANGEROUS_GIT_FLAGS:
+                return False
+        if args[0] == "-C":
+            if len(args) < 3:
+                return False
+            sub = args[2]
+            sub_args = args[3:]
+        else:
+            if args[0].startswith("-"):
+                return False
+            sub = args[0]
+            sub_args = args[1:]
+        if sub not in SAFE_GIT_SUBCOMMANDS:
+            return False
+        if sub == "branch" and any(a in ("-d", "-D", "-m", "-M", "--delete", "--move", "-c", "-C", "--copy") for a in sub_args):
+            return False
+        if sub == "tag" and any(not a.startswith("-l") and a != "--list" for a in sub_args):
+            return False
+        return True
+
+    if exe == "pacman":
+        return bool(args) and args[0] in SAFE_PACMAN_FLAGS
+
+    if exe == "ip":
+        return bool(args) and args[0] in ("addr", "a", "route", "r", "link", "l") and (
+            len(args) == 1 or args[1] in ("show", "list")
+        )
+
+    if exe == "niri":
+        # Allow ONLY read-only `niri msg [--json] <subcmd>` queries (blocks `action quit`, `action spawn`, etc.)
+        if len(args) < 2 or args[0] != "msg":
+            return False
+        rest = args[1:]
+        if rest and rest[0] in ("--json", "-j"):
+            rest = rest[1:]
+        return bool(rest) and rest[0] in SAFE_NIRI_MSG_SUBCOMMANDS
+
+    if exe == "hyprctl":
+        # Allow ONLY read-only `hyprctl [-j] <subcmd>` queries (blocks `dispatch exit`, `dispatch exec`, `keyword`, etc.)
+        rest = args[1:] if (args and args[0] in ("-j", "--json")) else args
+        return bool(rest) and rest[0] in SAFE_HYPRCTL_SUBCOMMANDS
+
+    if exe == "wpctl":
+        return bool(args) and args[0] in SAFE_WPCTL_SUBCOMMANDS
+
+    if exe == "pactl":
+        return bool(args) and args[0] in SAFE_PACTL_SUBCOMMANDS
+
+    if exe == "playerctl":
+        rest = [a for a in args if not a.startswith("-")]
+        return bool(rest) and rest[0] in SAFE_PLAYERCTL_SUBCOMMANDS
+
+    if exe in ("timedatectl", "hostnamectl"):
+        return not args or args == ["status"]
+
+    if exe == "journalctl":
+        return not any(a.split("=", 1)[0] in _DANGEROUS_JOURNALCTL_FLAGS for a in args)
+
+    if exe == "rg":
+        return not any(a.split("=", 1)[0] in _DANGEROUS_RG_FLAGS for a in args)
+
+    if exe == "sort":
+        return not any(a.split("=", 1)[0] in _DANGEROUS_SORT_FLAGS for a in args)
+
+    if exe == "find":
+        return not any(a in _DANGEROUS_FIND_FLAGS for a in args)
+
+    if exe == "fd":
+        return not any(a.split("=", 1)[0] in _DANGEROUS_FD_FLAGS for a in args)
+
+    if exe == "curl":
+        return not any(a.split("=", 1)[0] in _DANGEROUS_CURL_FLAGS for a in args)
+
+    return exe in SAFE_READONLY_BINARIES or exe in TRUSTED_EXTRA_SHELL_BINARIES
+
+
+def is_trusted_shell_command(command: str) -> bool:
+    """
+    Conservative allowlist evaluator for `run_bash` in `TRUSTED` mode.
+
+    Allows simple commands and `|` / `&&` pipelines composed solely of allowlisted
+    non-interpreter utilities with zero redirects, command/variable substitutions,
+    semicolons, subshells, code-exec flags, destructive patterns, or sensitive paths.
+    """
+    cmd_clean = (command or "").strip()
+    if not cmd_clean:
+        return False
+    if is_forbidden_shell_command(cmd_clean):
+        return False
+    if any(re.search(p, cmd_clean, re.IGNORECASE) for p in DESTRUCTIVE_SHELL_PATTERNS):
+        return False
+    if _TRUSTED_FORBIDDEN_META_RE.search(cmd_clean):
+        return False
+    if _command_touches_sensitive_path(cmd_clean):
+        return False
+
+    try:
+        lex = shlex.shlex(cmd_clean, posix=True, punctuation_chars="|&")
+        lex.whitespace_split = True
+        raw_tokens = list(lex)
+    except ValueError:
+        return False
+    if not raw_tokens:
+        return False
+
+    segments: list[list[str]] = []
+    cur: list[str] = []
+    for tok in raw_tokens:
+        if tok in ("|", "&&"):
+            if not cur:
+                return False
+            segments.append(cur)
+            cur = []
+        elif tok in ("&", "||") or any(ch in tok for ch in ("|", "&")):
+            # Reject backgrounding `&`, `||`, or unexpected operator clusters
+            return False
+        else:
+            cur.append(tok)
+    if not cur:
+        return False
+    segments.append(cur)
+
+    return all(_is_trusted_shell_segment(seg) for seg in segments)
+
+
 def is_safe_readonly_shell_command(command: str) -> bool:
     """
     Return True ONLY for an explicit allowlist of strictly read-only shell commands
@@ -497,7 +842,8 @@ class ToolPolicyEngine:
                 return PolicyDecision("allow", "read_only", "Безопасная read-only команда из allowlist.", summary)
 
             is_destructive = any(re.search(p, cmd, re.IGNORECASE) for p in DESTRUCTIVE_SHELL_PATTERNS)
-            risk: RiskLevel = "destructive" if is_destructive else "mutating"
+            touches_sensitive = _command_touches_sensitive_path(cmd)
+            risk: RiskLevel = "destructive" if (is_destructive or touches_sensitive) else "mutating"
             if self.mode == "safe":
                 return PolicyDecision(
                     "deny",
@@ -505,11 +851,21 @@ class ToolPolicyEngine:
                     "Режим политики SAFE запрещает произвольные shell-команды вне read-only allowlist.",
                     summary,
                 )
-            # Even in 'trusted', non-readonly shell commands still require explicit confirmation
+            if self.mode == "trusted" and is_trusted_shell_command(cmd):
+                return PolicyDecision(
+                    "allow",
+                    "mutating",
+                    "Разрешённая shell-команда из консервативного allowlist (режим TRUSTED).",
+                    summary,
+                )
             return PolicyDecision(
                 "ask",
                 risk,
-                "Команда shell не входит в read-only allowlist и требует подтверждения пользователя.",
+                (
+                    "Разрушающая/привилегированная команда или обращение к чувствительным путям требует подтверждения."
+                    if (is_destructive or touches_sensitive)
+                    else "Команда shell не входит в read-only allowlist и требует подтверждения пользователя."
+                ),
                 summary,
             )
 
@@ -552,6 +908,13 @@ class ToolPolicyEngine:
                     "deny",
                     "mutating",
                     "Запись файлов запрещена в режиме политики SAFE.",
+                    summary,
+                )
+            if self.mode == "trusted":
+                return PolicyDecision(
+                    "allow",
+                    "mutating",
+                    "Запись в обычный пользовательский файл (режим TRUSTED).",
                     summary,
                 )
             return PolicyDecision(
@@ -612,11 +975,20 @@ class ToolPolicyEngine:
                     f"Изменяющее действие ОС '{tool_name}' запрещено в режиме SAFE.",
                     summary,
                 )
-            if self.mode == "trusted" and tool_name in ("focus_window", "media_control", "set_volume"):
+            if self.mode == "trusted" and tool_name != "capri_voice_call":
+                if tool_name == "niri_action":
+                    raw_act = str(args.get("action", "") or "").strip()
+                    if not is_safe_trusted_compositor_action(raw_act):
+                        return PolicyDecision(
+                            "ask",
+                            "mutating",
+                            f"Действие композитора '{raw_act}' не входит в безопасный allowlist и требует подтверждения.",
+                            summary,
+                        )
                 return PolicyDecision(
                     "allow",
                     "mutating",
-                    "Неразрушающее управление рабочим столом (режим TRUSTED).",
+                    "Управление рабочим столом (режим TRUSTED).",
                     summary,
                 )
             return PolicyDecision(

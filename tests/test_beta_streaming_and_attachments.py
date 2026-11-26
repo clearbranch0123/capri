@@ -311,3 +311,112 @@ def test_speech_finished_preserves_response_quoting_placeholder():
             assert card_b.lbl_text.text() == "[Команда выполнена]"
         finally:
             deck.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_forces_final_synthesis_after_max_tool_iterations_never_empty(tmp_path):
+    """
+    Regression: when an LLM exhausts all tool-calling iterations (e.g., 8 rounds of
+    web_search/fetch/run_bash), CapriAgent must run a final synthesis turn (`tool_choice='none'`)
+    and return a real assistant response instead of exiting empty (`[Команда выполнена]`).
+    """
+    from types import SimpleNamespace
+    from capri.core.agent import CapriAgent
+    from capri.core.emotions import EmotionEngine
+    from capri.core.memory import MemoryStore
+    from capri.core.sessions import SessionManager
+
+    cfg = AppConfig()
+    cfg.llm.provider = "deepseek"
+    cfg.llm.model = "deepseek-chat"
+    cfg.llm.api_key = "sk-test-synth"
+    cfg.voice.tts_enabled = False
+    cfg.safety.tool_policy = "trusted"
+
+    seen_kwargs: list[dict] = []
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            seen_kwargs.append(dict(kwargs))
+            # For the first 8 iterations, keep requesting read-only tool calls
+            if len(seen_kwargs) <= 8:
+                tc = SimpleNamespace(
+                    id=f"call_loop_{len(seen_kwargs)}",
+                    function=SimpleNamespace(name="get_system_status", arguments="{}"),
+                )
+                msg = SimpleNamespace(content="", reasoning_content="Собираю данные...", tool_calls=[tc])
+                return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+            # On the forced synthesis round (call 9), model must receive tool_choice='none' and reply with text
+            msg = SimpleNamespace(
+                content="Готово, D: собрал все данные по системе и ничего не оборвалось!",
+                reasoning_content="",
+                tool_calls=None,
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=_FakeCompletions()))
+    iso_sm = SessionManager(db_path=tmp_path / "synth_sessions.db")
+    with (
+        patch("capri.core.agent.EmotionEngine", side_effect=lambda: EmotionEngine(file_path=tmp_path / "emo.json")),
+        patch("capri.core.agent.MemoryStore", side_effect=lambda: MemoryStore(file_path=tmp_path / "mem.json")),
+        patch("capri.core.agent.registry.execute", return_value="CPU 12%, RAM 34%"),
+    ):
+        agent = CapriAgent(cfg, session_manager=iso_sm)
+        agent._get_client = lambda: fake_client
+        events = [ev async for ev in agent.chat("Проверь всё подряд", speak=False, stream=False)]
+
+    done_events = [ev for ev in events if ev.type == "done"]
+    assert len(done_events) == 1
+    assert "собрал все данные по системе" in done_events[0].data
+    assert "[Команда выполнена]" not in done_events[0].data
+    # Verify forced synthesis round passed tool_choice='none' and history closes cleanly with assistant
+    assert len(seen_kwargs) == 9
+    assert seen_kwargs[-1].get("tool_choice") == "none"
+    assert agent.history[-1]["role"] == "assistant"
+    assert "собрал все данные по системе" in agent.history[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_fallback_when_synthesis_still_returns_empty_after_tools(tmp_path):
+    """Even if a broken LLM returns empty text on synthesis too, never leave a dangling tool turn or empty done."""
+    from types import SimpleNamespace
+    from capri.core.agent import CapriAgent
+    from capri.core.emotions import EmotionEngine
+    from capri.core.memory import MemoryStore
+    from capri.core.sessions import SessionManager
+
+    cfg = AppConfig()
+    cfg.llm.provider = "deepseek"
+    cfg.llm.model = "deepseek-chat"
+    cfg.llm.api_key = "sk-test-empty"
+    cfg.voice.tts_enabled = False
+    cfg.safety.tool_policy = "trusted"
+
+    call_n = {"i": 0}
+
+    class _AlwaysEmptyAfterTool:
+        async def create(self, **kwargs):
+            call_n["i"] += 1
+            if call_n["i"] == 1:
+                tc = SimpleNamespace(
+                    id="call_1",
+                    function=SimpleNamespace(name="get_system_status", arguments="{}"),
+                )
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="", reasoning_content="", tool_calls=[tc]))])
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="", reasoning_content="hmm", tool_calls=None))])
+
+    iso_sm = SessionManager(db_path=tmp_path / "empty_synth.db")
+    with (
+        patch("capri.core.agent.EmotionEngine", side_effect=lambda: EmotionEngine(file_path=tmp_path / "emo2.json")),
+        patch("capri.core.agent.MemoryStore", side_effect=lambda: MemoryStore(file_path=tmp_path / "mem2.json")),
+        patch("capri.core.agent.registry.execute", return_value="Host uptime: 4h 12m"),
+    ):
+        agent = CapriAgent(cfg, session_manager=iso_sm)
+        fake_empty_client = SimpleNamespace(chat=SimpleNamespace(completions=_AlwaysEmptyAfterTool()))
+        agent._get_client = lambda: fake_empty_client
+        events = [ev async for ev in agent.chat("Чекни аптайм", speak=False, stream=False)]
+
+    done_events = [ev for ev in events if ev.type == "done"]
+    assert len(done_events) == 1
+    assert "Host uptime: 4h 12m" in done_events[0].data
+    assert agent.history[-1]["role"] == "assistant"

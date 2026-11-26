@@ -112,10 +112,51 @@ async def test_policy_engine_modes_and_fail_closed():
     dec_env = engine.evaluate("read_file", {"path": ".env"})
     assert dec_env.action == "ask"
 
-    # Even in 'trusted' mode, mutating shell, file writes, and kill_process STILL require confirmation
+    # In 'trusted' mode, normal desktop, allowlisted non-interpreter shell pipelines, and normal writes are auto-allowed,
+    # while interpreters/code-exec (`python3 -c`, `bash -c`, `find -exec`), redirects, destructive shell,
+    # sensitive writes/reads, kill_process, and forbidden patterns remain protected
     trusted = ToolPolicyEngine(mode="trusted")
+    assert trusted.evaluate("run_bash", {"command": "ls | grep capri"}).action == "allow"
+    assert trusted.evaluate("run_bash", {"command": "mkdir -p /tmp/capri_demo && touch /tmp/capri_demo/a.txt"}).action == "allow"
+    assert trusted.evaluate("run_bash", {"command": "niri msg windows | grep kitty"}).action == "allow"
+    assert trusted.evaluate("run_bash", {"command": "niri msg --json workspaces"}).action == "allow"
+    assert trusted.evaluate("run_bash", {"command": "hyprctl -j clients | grep kitty"}).action == "allow"
+    assert trusted.evaluate("run_bash", {"command": "rg capri capri/core"}).action == "allow"
+    assert trusted.evaluate("write_file", {"path": "/tmp/a.txt", "content": "hi"}).action == "allow"
+    assert trusted.evaluate("open_app", {"app_name": "kitty"}).action == "allow"
+    assert trusted.evaluate("open_url", {"url": "https://example.com"}).action == "allow"
+    assert trusted.evaluate("niri_action", {"action": "focus-workspace-down"}).action == "allow"
+    assert trusted.evaluate("niri_action", {"action": "focus-workspace 3"}).action == "allow"
+    assert trusted.evaluate("niri_action", {"action": "toggle-overview"}).action == "allow"
+    # Red lines, compositor quit/spawn/exec/arbitrary actions & interpreter/redirect bypasses stay protected even in 'trusted'
+    assert trusted.evaluate("run_bash", {"command": "niri msg action quit"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "niri msg action spawn kitty"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "hyprctl dispatch exit"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "hyprctl dispatch exec kitty"}).action == "ask"
+    assert trusted.evaluate("niri_action", {"action": "quit"}).action == "ask"
+    assert trusted.evaluate("niri_action", {"action": "spawn kitty"}).action == "ask"
+    assert trusted.evaluate("niri_action", {"action": "load-config-file"}).action == "ask"
+    assert trusted.evaluate("niri_action", {"action": "close-window"}).action == "ask"
+    assert trusted.evaluate("niri_action", {"action": "unknown-custom-dispatch"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "rg --pre=sh foo /tmp"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "sort -o /tmp/out.txt /tmp/in.txt"}).action == "ask"
+    assert trusted.evaluate(
+        "run_bash",
+        {"command": "python3 -c \"from pathlib import Path; Path.home().joinpath('.bashrc').write_text('x')\""},
+    ).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "python3 -c \"print('hi')\""}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "bash -c 'echo hi'"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "node -e 'console.log(1)'"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "find /tmp -exec echo {} +"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "fd . /tmp -x echo"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "echo hi > /tmp/out.txt"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "curl -o /tmp/x https://example.com"}).action == "ask"
     assert trusted.evaluate("run_bash", {"command": "rm /tmp/foo"}).action == "ask"
-    assert trusted.evaluate("write_file", {"path": "/tmp/a.txt", "content": "hi"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "sudo ls"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "cat .env"}).action == "ask"
+    assert trusted.evaluate("run_bash", {"command": "touch ~/.config/niri/config.kdl"}).action == "ask"
+    assert trusted.evaluate("write_file", {"path": "~/.bashrc", "content": "x"}).action == "ask"
+    assert trusted.evaluate("write_file", {"path": "/etc/hosts", "content": "x"}).action == "ask"
     assert trusted.evaluate("kill_process", {"target": "firefox"}).action == "ask"
     assert trusted.evaluate("run_bash", {"command": "rm -rf /"}).action == "deny"
 
@@ -145,6 +186,29 @@ async def test_policy_engine_modes_and_fail_closed():
     for capri_ro in ("recall_memory", "get_work_context", "get_initiative_status", "list_timers"):
         ok_ro, dec_ro = await safe.authorize(capri_ro, {})
         assert ok_ro is True and dec_ro.action == "allow"
+
+
+@pytest.mark.asyncio
+async def test_hyprland_compositor_maps_numbered_workspace_actions(monkeypatch):
+    from capri.core.compositor import CompositorBackend
+
+    calls: list[list[str]] = []
+
+    async def _fake_run_async(cmd):
+        calls.append(list(cmd))
+        return 0, "ok", ""
+
+    monkeypatch.setattr("capri.core.compositor._run_async", _fake_run_async)
+    backend = CompositorBackend()
+    monkeypatch.setattr(type(backend), "kind", property(lambda self: "hyprland"))
+
+    ok1, _ = await backend.async_dispatch_action("focus-workspace 3")
+    ok2, _ = await backend.async_dispatch_action("move-column-to-workspace 5")
+    assert ok1 is True and ok2 is True
+    assert calls == [
+        ["hyprctl", "dispatch", "workspace", "3"],
+        ["hyprctl", "dispatch", "movetoworkspace", "5"],
+    ]
 
 
 @pytest.mark.asyncio

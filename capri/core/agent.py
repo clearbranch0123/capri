@@ -659,19 +659,26 @@ class CapriAgent:
         turn_thought = ""
 
         tools_schema = registry.get_schemas()
-        max_tool_iterations = 5
+        max_tool_iterations = 8
         iteration = 0
 
         final_response_text = ""
         appraisal_applied_via_tool = False
         empty_retry_used = False
+        force_final_synthesis = False
+        synthesis_round_used = False
         stream_tts_session = None
 
-        while iteration < max_tool_iterations:
+        while iteration < max_tool_iterations or force_final_synthesis:
             if self._abort_requested:
                 final_response_text = "[Генерация ответа остановлена пользователем]"
                 break
-            iteration += 1
+            in_synthesis_round = force_final_synthesis
+            if in_synthesis_round:
+                force_final_synthesis = False
+                synthesis_round_used = True
+            else:
+                iteration += 1
             try:
                 client = self._get_client()
                 provider = (self.config.llm.provider or "").lower()
@@ -679,23 +686,31 @@ class CapriAgent:
                 # Для DeepSeek и других провайдеров сохраняем pass_tools для поддержки multi-step tool calling
                 # и предотвращения ошибок валидации schema сообщений tool.
                 if provider == "groq":
-                    pass_tools = tools_schema if (tools_schema and iteration == 1) else None
+                    pass_tools = tools_schema if (tools_schema and iteration == 1 and not in_synthesis_round) else None
                 else:
                     pass_tools = tools_schema
 
                 prepared_messages = self._prepare_messages_for_llm(self.history, provider)
+                extra_directives: list[str] = []
+                if in_synthesis_round and turn_tools:
+                    extra_directives.append(
+                        "[ФИНАЛЬНЫЙ ОТВЕТ]: Все нужные инструменты уже выполнены. Не вызывай больше инструменты — "
+                        "сразу дай живой, полный и законченный видимый ответ пользователю на основе полученных результатов."
+                    )
                 if empty_retry_used:
-                    retry_directive = (
-                        "\n\n[ВОССТАНОВЛЕНИЕ ОТВЕТА]: Предыдущий шаг завершился без видимого текста после "
+                    extra_directives.append(
+                        "[ВОССТАНОВЛЕНИЕ ОТВЕТА]: Предыдущий шаг завершился без видимого текста после "
                         "внутреннего рассуждения. Сразу выведи лаконичный и законченный видимый ответ Капри "
                         "на последний запрос пользователя."
                     )
+                if extra_directives:
+                    directive_block = "\n\n" + "\n\n".join(extra_directives)
                     if prepared_messages and prepared_messages[0].get("role") == "system":
                         first_sys = dict(prepared_messages[0])
-                        first_sys["content"] = f"{first_sys.get('content', '')}{retry_directive}"
+                        first_sys["content"] = f"{first_sys.get('content', '')}{directive_block}"
                         prepared_messages = [first_sys] + prepared_messages[1:]
                     else:
-                        prepared_messages = [{"role": "system", "content": retry_directive.strip()}] + prepared_messages
+                        prepared_messages = [{"role": "system", "content": directive_block.strip()}] + prepared_messages
 
                 effective_max_tokens = int(getattr(self.config.llm, "max_tokens", 2048) or 2048)
                 # Reasoning/thinking models (DeepSeek Flash/Reasoner, Gemini 2.5 Flash) share max_tokens
@@ -717,21 +732,33 @@ class CapriAgent:
                         request_kwargs["presence_penalty"] = self.config.llm.presence_penalty
                 if pass_tools:
                     request_kwargs["tools"] = pass_tools
+                    if in_synthesis_round:
+                        request_kwargs["tool_choice"] = "none"
                 if stream:
                     request_kwargs["stream"] = True
 
                 # Call LLM (streaming with seamless fallback to non-streaming responses/mocks;
-                # if a local Ollama/LM Studio model does not support tool calling, automatically retry without tools)
+                # if a local Ollama/LM Studio model does not support tool calling or tool_choice, retry cleanly)
                 try:
                     response = await client.chat.completions.create(**request_kwargs)
                 except Exception as tool_exc:
                     err_low = str(tool_exc).lower()
-                    if "tools" in request_kwargs and (
+                    if "tool_choice" in request_kwargs and (
+                        "tool_choice" in err_low
+                        or "does not support" in err_low
+                        or "unsupported" in err_low
+                        or "invalid" in err_low
+                    ):
+                        request_kwargs.pop("tool_choice", None)
+                        request_kwargs.pop("tools", None)
+                        response = await client.chat.completions.create(**request_kwargs)
+                    elif "tools" in request_kwargs and (
                         "does not support tools" in err_low
                         or "tool calling is not supported" in err_low
                         or "tools is not supported" in err_low
                     ):
                         request_kwargs.pop("tools", None)
+                        request_kwargs.pop("tool_choice", None)
                         response = await client.chat.completions.create(**request_kwargs)
                     else:
                         raise
@@ -874,8 +901,8 @@ class CapriAgent:
                         for tc in message.tool_calls
                     ]
 
-            # Check if LLM requested tool calls
-            if streamed_tool_calls:
+            # Check if LLM requested tool calls (skip executing extra tools during the forced final synthesis round)
+            if streamed_tool_calls and not in_synthesis_round:
                 if stream_tts_session is not None:
                     stream_tts_session.cancel()
                     stream_tts_session = None
@@ -973,6 +1000,8 @@ class CapriAgent:
                     )
                 if self._abort_requested:
                     break
+                if iteration >= max_tool_iterations and not synthesis_round_used:
+                    force_final_synthesis = True
                 continue
 
             # Standard text response
@@ -988,9 +1017,10 @@ class CapriAgent:
                 not clean_text.strip()
                 and not empty_retry_used
                 and not self._abort_requested
-                and iteration < max_tool_iterations
             ):
                 empty_retry_used = True
+                if iteration >= max_tool_iterations:
+                    force_final_synthesis = True
                 if stream_tts_session is not None:
                     stream_tts_session.cancel()
                     stream_tts_session = None
@@ -1047,6 +1077,23 @@ class CapriAgent:
                 stream_tts_session = None
             if not final_response_text:
                 final_response_text = "[Генерация ответа остановлена пользователем]"
+            if not self.history or self.history[-1].get("role") != "assistant":
+                self.history.append({"role": "assistant", "content": final_response_text})
+            yield AgentEvent("delta", final_response_text)
+        elif not final_response_text.strip() and turn_tools:
+            # Never leave a dangling role="tool" message or silent empty reply after tool calls
+            last_res = ""
+            for t_item in reversed(turn_tools):
+                cand = str(t_item.get("result") or "").strip()
+                if cand:
+                    last_res = cand[:600]
+                    break
+            fallback_msg = (
+                f"Инструменты выполнены, но модель не вернула финальный текст. Последний результат:\n{last_res}"
+                if last_res
+                else "Инструменты выполнены, но модель вернула пустой ответ. Попробуй уточнить запрос."
+            )
+            final_response_text = fallback_msg
             if not self.history or self.history[-1].get("role") != "assistant":
                 self.history.append({"role": "assistant", "content": final_response_text})
             yield AgentEvent("delta", final_response_text)

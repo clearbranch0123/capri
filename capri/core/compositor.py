@@ -1074,7 +1074,16 @@ class CompositorBackend:
                     f"Действие '{action_clean}' специфично для Niri и не поддерживается в базовом Hyprland.",
                 )
             mapped = _NIRI_TO_HYPRLAND_ACTIONS.get(action_l)
-            args = mapped if mapped else action_clean.split()
+            if mapped:
+                args = mapped
+            else:
+                parts = action_l.split()
+                if len(parts) == 2 and parts[0] == "focus-workspace" and parts[1].isdigit():
+                    args = ["workspace", parts[1]]
+                elif len(parts) == 2 and parts[0] == "move-column-to-workspace" and parts[1].isdigit():
+                    args = ["movetoworkspace", parts[1]]
+                else:
+                    args = action_clean.split()
             code, out, err = await _run_async(["hyprctl", "dispatch"] + args)
             return code == 0, (err or out).strip()
         return False, "No supported compositor active"

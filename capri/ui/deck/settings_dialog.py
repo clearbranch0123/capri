@@ -289,7 +289,7 @@ class CapriProviderSettingsDialog(QDialog):
         self.combo_policy.setMinimumHeight(36)
         self.combo_policy.addItem("Ask — запрашивать подтверждение на изменения (Рекомендуется)", "ask")
         self.combo_policy.addItem("Safe — строгий read-only режим (запрет любых изменений)", "safe")
-        self.combo_policy.addItem("Trusted — десктоп авто, shell/файлы/kill с подтверждением", "trusted")
+        self.combo_policy.addItem("Trusted — десктоп и обычные shell/файлы авто; sudo/rm/kill/секреты с подтверждением", "trusted")
         curr_pol = (getattr(self.config.safety, "tool_policy", "ask") or "ask").lower()
         pol_idx = self.combo_policy.findData(curr_pol)
         if pol_idx >= 0:
