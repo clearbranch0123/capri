@@ -193,8 +193,14 @@ class ToolRegistry:
                     if alias in arguments:
                         val = arguments[alias]
                         break
-                # Если передан ровно один аргумент под неизвестным ключом, а функция ждет один обязательный параметр
-                if val is None and len(arguments) == 1 and req_params_count == 1:
+                # Если передан ровно один аргумент под неизвестным ключом, а текущий параметр — единственный обязательный
+                if (
+                    val is None
+                    and p_param.default is inspect.Parameter.empty
+                    and len(arguments) == 1
+                    and req_params_count == 1
+                    and next(iter(arguments.keys())) not in sig.parameters
+                ):
                     val = list(arguments.values())[0]
 
             # Если передан null, а в функции есть значение по умолчанию — подставляем дефолт

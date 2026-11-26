@@ -264,6 +264,65 @@ def test_sensitive_dotfiles_and_compositor_configs_protected_across_all_fs_read_
 
 
 @pytest.mark.asyncio
+async def test_sensitive_dotfiles_and_niri_config_e2e_via_registry_execute(monkeypatch, tmp_path):
+    """
+    End-to-end integration test through `registry.execute()` (not just `.evaluate()`):
+    verifies read_file, list_directory, and find_files block sensitive dotfiles & compositor
+    configs (direct and via symlinks) fail-closed in SAFE/ASK/TRUSTED, allow only on explicit
+    approval, and filter sensitive hits out of generic `find_files` listings.
+    """
+    from capri.tools.registry import registry
+
+    fake_home = tmp_path / "home_e2e"
+    niri_dir = fake_home / ".config" / "niri"
+    niri_dir.mkdir(parents=True)
+    bashrc = fake_home / ".bashrc"
+    bashrc.write_text("export TOP_SECRET_BASHRC=sentinel_value_123\n", encoding="utf-8")
+    niri_cfg = niri_dir / "config.kdl"
+    niri_cfg.write_text('binds { Mod+T { spawn "kitty"; } }\n', encoding="utf-8")
+    normal_file = fake_home / "notes.txt"
+    normal_file.write_text("regular note ok\n", encoding="utf-8")
+
+    sym_bashrc = tmp_path / "public_link.txt"
+    sym_bashrc.symlink_to(bashrc)
+    sym_niri = tmp_path / "public_dir"
+    sym_niri.symlink_to(niri_dir)
+
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    safe_pol = ToolPolicyEngine(mode="safe")
+    ask_pol = ToolPolicyEngine(mode="ask")  # fail-closed without approval handler
+    trusted_deny = ToolPolicyEngine(mode="trusted", approval_handler=lambda req: False)
+    trusted_allow = ToolPolicyEngine(mode="trusted", approval_handler=lambda req: True)
+
+    for pol in (safe_pol, ask_pol, trusted_deny):
+        out_read = await registry.execute("read_file", {"path": str(bashrc)}, policy_engine=pol)
+        assert "sentinel_value_123" not in out_read
+        out_sym_read = await registry.execute("read_file", {"path": str(sym_bashrc)}, policy_engine=pol)
+        assert "sentinel_value_123" not in out_sym_read
+        out_list = await registry.execute("list_directory", {"path": str(sym_niri)}, policy_engine=pol)
+        assert "config.kdl" not in out_list
+        out_find = await registry.execute(
+            "find_files", {"pattern": "*", "search_path": str(sym_niri)}, policy_engine=pol
+        )
+        assert "config.kdl" not in out_find
+
+    # Explicit user approval in TRUSTED permits reading the target cleanly
+    approved_read = await registry.execute("read_file", {"path": str(bashrc)}, policy_engine=trusted_allow)
+    assert "sentinel_value_123" in approved_read
+
+    # Normal file remains readable in SAFE, and generic find_files filters out .bashrc and .config/niri
+    normal_out = await registry.execute("read_file", {"path": str(normal_file)}, policy_engine=safe_pol)
+    assert "regular note ok" in normal_out
+    generic_find = await registry.execute(
+        "find_files", {"pattern": "*", "search_path": str(fake_home)}, policy_engine=safe_pol
+    )
+    assert "notes.txt" in generic_find
+    assert ".bashrc" not in generic_find
+    assert "config.kdl" not in generic_find
+
+
+@pytest.mark.asyncio
 async def test_config_yaml_blocked_via_canonical_paths_and_symlinks(tmp_path):
     from capri.core.config import ROOT_DIR, USER_CONFIG_FILE
 

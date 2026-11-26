@@ -1,6 +1,6 @@
 """
 CAPRI // Cyberpunk AI Companion for Linux (Niri Wayland / Hyprland / Arch / CachyOS / Fedora)
-Construct Relic Engram — VOICE 3.0, FOCUS & ARCH ECOSYSTEM (v3.7.2)
+Construct Relic Engram — VOICE 3.0, FOCUS & ARCH ECOSYSTEM (v3.7.3)
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-__version__ = "3.7.2"
+__version__ = "3.7.3"
 __app_name__ = "Capri"
 __codename__ = "Project Capricorn // Relic Engram"
 __author__ = "D"

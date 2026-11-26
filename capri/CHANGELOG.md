@@ -5,6 +5,17 @@
 
 ---
 
+## [3.7.3] — 2026-11-26 (Tool Registry Single-Arg Fix & End-to-End FS Policy Tests)
+
+Короткий bugfix-релиз, исправляющий ошибку разбора аргументов в `ToolRegistry.execute()` для инструментов с опциональными параметрами (включая `read_file`).
+
+### 🐛 Исправления и тесты
+- **Исправление одноаргументного фоллбэка в `capri/tools/registry.py`:** фоллбэк подстановки неизвестного ключа теперь срабатывает только для единственного обязательного параметра и только если переданный ключ отсутствует среди параметров функции — устранена ошибка, из-за которой вызов `read_file({"path": "..."})` без `max_lines` подставлял путь в `max_lines` и падал с `invalid literal for int()`.
+- **Интеграционные end-to-end тесты (`tests/test_beta_security_and_packaging.py`):** добавлен сквозной тест через `registry.execute()` для `read_file`, `list_directory` и `find_files` по реальным файлам и symlink-ам (`~/.bashrc`, `~/.config/niri/config.kdl`) во всех режимах политики (`SAFE`, `ASK`, `TRUSTED`).
+- **Верификация релиза v3.7.3:** **310/310 passed, 0 warnings**.
+
+---
+
 ## [3.7.2] — 2026-11-26 (Sensitive Dotfile & Compositor Config Read Guard)
 
 Точечный security-хотфикс, выравнивающий защиту чтения файловых инструментов с `SECURITY.md` и shell-политикой.
