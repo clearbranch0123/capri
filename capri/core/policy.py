@@ -371,6 +371,14 @@ _DANGEROUS_CURL_FLAGS: frozenset[str] = frozenset({
 # (blocks redirects, subshells, command/variable substitution, semicolons, backgrounding, newlines)
 _TRUSTED_FORBIDDEN_META_RE = re.compile(r"[;><`$\n\r()]")
 
+SENSITIVE_HOME_DOTFILES: tuple[str, ...] = (
+    ".bashrc",
+    ".zshrc",
+    ".profile",
+    ".bash_profile",
+    ".xprofile",
+)
+
 SENSITIVE_PATH_FRAGMENTS: tuple[str, ...] = (
     "/.env",
     "/.ssh/",
@@ -389,7 +397,14 @@ SENSITIVE_PATH_FRAGMENTS: tuple[str, ...] = (
     "/.config/capri",
     "/.config/autostart",
     "/.config/systemd",
+    "/.config/niri",
+    "/.config/hypr",
     "/.git/hooks",
+    "/.bashrc",
+    "/.zshrc",
+    "/.profile",
+    "/.bash_profile",
+    "/.xprofile",
     "/id_rsa",
     "/id_ed25519",
 )
@@ -494,18 +509,24 @@ def _touches_sensitive_path(raw: str) -> bool:
         return False
     low = norm.lower()
     base_name = os.path.basename(low)
-    if base_name in (".env", ".env.local", "config.yaml"):
+    sensitive_names = (".env", ".env.local", "config.yaml") + SENSITIVE_HOME_DOTFILES
+    if base_name in sensitive_names:
         return True
-    if low.endswith("/.env") or low.endswith("/.env.local") or low.endswith("/config.yaml"):
+    if any(low.endswith("/" + name) for name in sensitive_names):
         return True
 
     sensitive_canonical = _canonical_sensitive_files()
+    home = str(Path.home().resolve()).lower()
     for cand in _resolve_candidate_paths(norm):
         if cand in sensitive_canonical:
             return True
         cand_low = str(cand).lower()
-        if cand.name.lower() in (".env", ".env.local", "config.yaml"):
+        if cand.name.lower() in sensitive_names:
             return True
+        for sub in SENSITIVE_HOME_WRITE_SUBPATHS:
+            full_sub = os.path.join(home, sub).lower()
+            if cand_low == full_sub or cand_low.startswith(full_sub + "/"):
+                return True
         for frag in SENSITIVE_PATH_FRAGMENTS:
             if frag in cand_low:
                 return True
@@ -524,7 +545,7 @@ def _is_sensitive_write_target(raw_path: str) -> bool:
         if resolved == pref or resolved.startswith(pref + "/"):
             return True
     home = str(Path.home().resolve())
-    for dotfile in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".xprofile"):
+    for dotfile in SENSITIVE_HOME_DOTFILES:
         if resolved == os.path.join(home, dotfile):
             return True
     for sub in SENSITIVE_HOME_WRITE_SUBPATHS:
@@ -871,7 +892,8 @@ class ToolPolicyEngine:
 
         if tool_name in ("read_file", "list_directory", "find_files"):
             raw_path = str(args.get("path") or args.get("search_path") or "")
-            if _touches_sensitive_path(raw_path):
+            raw_pattern = str(args.get("pattern") or "") if tool_name == "find_files" else ""
+            if _touches_sensitive_path(raw_path) or (raw_pattern and _touches_sensitive_path(raw_pattern)):
                 if self.mode == "safe":
                     return PolicyDecision(
                         "deny",
@@ -882,7 +904,7 @@ class ToolPolicyEngine:
                 return PolicyDecision(
                     "ask",
                     "destructive",
-                    f"Доступ к чувствительному пути (.env / SSH / конфиг секретов) через {tool_name} требует подтверждения.",
+                    f"Доступ к чувствительному пути (.env / SSH / shell dotfiles / конфиг композитора) через {tool_name} требует подтверждения.",
                     summary,
                 )
             return PolicyDecision("allow", "read_only", "Чтение файловой системы.", summary)

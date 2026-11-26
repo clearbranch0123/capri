@@ -128,11 +128,9 @@ async def find_files(pattern: str, search_path: str = "~") -> str:
         if timed_out:
             return f"Поиск файлов по '{pat}' в {target} превысил лимит времени и был остановлен."
         raw_lines = [line.strip() for line in stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
-        # Never expose sensitive .env / private key filenames in generic search listings
-        lines = [
-            ln for ln in raw_lines
-            if os.path.basename(ln).lower() not in (".env", ".env.local", "id_rsa", "id_ed25519")
-        ]
+        # Never expose sensitive dotfiles, secret keys, or protected config paths in generic search listings
+        from ..core.policy import _touches_sensitive_path
+        lines = [ln for ln in raw_lines if not _touches_sensitive_path(ln)]
         if not lines:
             return f"Файлы по шаблону '{pat}' в {target} не найдены."
         shown = lines[:25]

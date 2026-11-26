@@ -211,6 +211,58 @@ async def test_hyprland_compositor_maps_numbered_workspace_actions(monkeypatch):
     ]
 
 
+def test_sensitive_dotfiles_and_compositor_configs_protected_across_all_fs_read_tools(tmp_path):
+    """
+    Regression: read_file, list_directory, and find_files must enforce sensitive-path
+    protection for shell dotfiles (~/.bashrc, ~/.zshrc, ~/.profile) and compositor configs
+    (~/.config/niri, ~/.config/hypr) in SAFE (deny), ASK (ask), and TRUSTED (ask).
+    """
+    safe = ToolPolicyEngine(mode="safe")
+    ask = ToolPolicyEngine(mode="ask")
+    trusted = ToolPolicyEngine(mode="trusted")
+
+    sensitive_targets = (
+        "~/.bashrc",
+        "~/.zshrc",
+        "~/.profile",
+        "~/.config/niri",
+        "~/.config/niri/config.kdl",
+        "~/.config/hypr",
+        "~/.config/hypr/hyprland.conf",
+    )
+    for target in sensitive_targets:
+        assert safe.evaluate("read_file", {"path": target}).action == "deny", f"SAFE read_file allowed {target}"
+        assert ask.evaluate("read_file", {"path": target}).action == "ask", f"ASK read_file allowed {target}"
+        assert trusted.evaluate("read_file", {"path": target}).action == "ask", f"TRUSTED read_file allowed {target}"
+
+        assert safe.evaluate("list_directory", {"path": target}).action == "deny", f"SAFE list_directory allowed {target}"
+        assert ask.evaluate("list_directory", {"path": target}).action == "ask", f"ASK list_directory allowed {target}"
+        assert trusted.evaluate("list_directory", {"path": target}).action == "ask", f"TRUSTED list_directory allowed {target}"
+
+        assert safe.evaluate("find_files", {"pattern": "*", "search_path": target}).action == "deny"
+        assert ask.evaluate("find_files", {"pattern": "*", "search_path": target}).action == "ask"
+        assert trusted.evaluate("find_files", {"pattern": "*", "search_path": target}).action == "ask"
+
+    # Pattern targeting a sensitive dotfile from a generic search_path is also gated
+    assert safe.evaluate("find_files", {"pattern": ".bashrc", "search_path": "~"}).action == "deny"
+    assert trusted.evaluate("find_files", {"pattern": ".bashrc", "search_path": "~"}).action == "ask"
+
+    # Symlinks pointing to a sensitive dotfile or compositor config must be caught across all 3 fs read tools
+    sym_bashrc = tmp_path / "notes.txt"
+    sym_bashrc.symlink_to(Path.home() / ".bashrc")
+    sym_niri = tmp_path / "wm_dir"
+    sym_niri.symlink_to(Path.home() / ".config" / "niri")
+    for tool_name, payload in (
+        ("read_file", {"path": str(sym_bashrc)}),
+        ("read_file", {"path": str(sym_niri / "config.kdl")}),
+        ("list_directory", {"path": str(sym_niri)}),
+        ("find_files", {"pattern": "*", "search_path": str(sym_niri)}),
+    ):
+        assert safe.evaluate(tool_name, payload).action == "deny", f"SAFE symlink bypass via {tool_name}"
+        assert ask.evaluate(tool_name, payload).action == "ask", f"ASK symlink bypass via {tool_name}"
+        assert trusted.evaluate(tool_name, payload).action == "ask", f"TRUSTED symlink bypass via {tool_name}"
+
+
 @pytest.mark.asyncio
 async def test_config_yaml_blocked_via_canonical_paths_and_symlinks(tmp_path):
     from capri.core.config import ROOT_DIR, USER_CONFIG_FILE

@@ -5,6 +5,16 @@
 
 ---
 
+## [3.7.2] — 2026-11-26 (Sensitive Dotfile & Compositor Config Read Guard)
+
+Точечный security-хотфикс, выравнивающий защиту чтения файловых инструментов с `SECURITY.md` и shell-политикой.
+
+### 🔒 Защита чувствительных путей для `read_file`, `list_directory` и `find_files`
+- **Единая проверка dotfiles и конфигов композиторов (`capri/core/policy.py`, `capri/tools/fs.py`, `SECURITY.md`):** `~/.bashrc`, `~/.zshrc`, `~/.profile`, `~/.bash_profile`, `~/.xprofile`, `~/.config/niri` и `~/.config/hypr` (включая symlink-разрешение и `pattern` в `find_files`) теперь защищены во всех файловых инструментах чтения (`SAFE` — `deny`, `ASK` и `TRUSTED` — `ask`), а общий листинг `find_files` отфильтровывает их из выдачи.
+- **Верификация релиза v3.7.2:** **309/309 passed, 0 warnings** (включая тесты прямых и symlink-обращений ко всем трём инструментам).
+
+---
+
 ## [3.7.1] — 2026-11-26 (Hardened TRUSTED Policy & Guaranteed Tool-Loop Final Synthesis)
 
 Хотфикс повседневного UX и надёжности агента после `v3.7.0`: реальный доверенный режим `TRUSTED` на строгих allowlist-ах и полное устранение пустых ответов `[Команда выполнена]` после длинных цепочек инструментов.
