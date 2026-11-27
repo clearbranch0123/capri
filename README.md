@@ -2,7 +2,7 @@
 
 🇬🇧 **English** · 🇷🇺 **[Русский](README.ru.md)**
 
-[![Version](https://img.shields.io/badge/version-v3.8.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.1)
+[![Version](https://img.shields.io/badge/version-v3.8.2-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.2)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/Tests-313%2F313%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
@@ -11,7 +11,7 @@
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
 [![Assets Notice](https://img.shields.io/badge/Assets-Noncommercial-e8ad52.svg?style=for-the-badge)](ASSETS_NOTICE.md)
 
-> **Unofficial fan project & license notice:** Capri Linux is an independent, non-commercial open-source fan project and is **not affiliated with, endorsed by, or associated with CD PROJEKT RED, Studio Trigger, or Netflix**. The MIT License ([`LICENSE`](LICENSE)) applies **to source code only**; visual and audio assets under `capri/assets/` carry separate non-commercial terms — see [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
+> **Unofficial fan project & license notice:** Capri Linux is an independent, non-commercial fan project and is **not affiliated with, endorsed by, or associated with CD PROJEKT RED, Studio Trigger, or Netflix**. The **MIT License** ([`LICENSE`](LICENSE)) applies **to source code only**; bundled visual and audio assets under `capri/assets/` carry separate **PolyForm Noncommercial 1.0.0** terms — see [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
 A local-first Linux desktop AI companion built for **Wayland** and **PipeWire**, combining the **Project Capricorn** engram persona (*Soul & Canon*), low-latency **Voice 3.0**, developer **Watch & Focus Companion** (`capri --watch`, `/pomodoro`), native Arch/CachyOS **`PKGBUILD` & `systemd --user`** integration, a floating **Quick Ask Bar** (`capri-deck --ask`), a physics-driven native **`zwlr_layer_shell_v1`** desktop avatar, hybrid **Memory & Context 2.0**, 1-click **EN / RU** UI switching, and the unified **Crimson Graphite** UI.
 
@@ -27,7 +27,7 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 - **⏱️ Dev & Focus Companion (`v3.6`):** `capri --watch "<cmd>"` wraps long builds/tests with native TTY passthrough, exact exit codes, and voice/avatar completion alerts; `/pomodoro [25|50|15|off]` (and the avatar card) adds a lilac holographic progress ring under Capri's heels with an automatic silence gate.
 - **📦 Arch / CachyOS Ecosystem & Modular Packaging (`v3.6`):** Ready-to-build [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD), opt-in `systemd --user` service (`capri --service install`) with compositor-restart auto-reconnect, modular `pyproject.toml` extras (`[voice]`, `[local-stt]`, `[vision]`, `[web]`, `[all]`), and enhanced `/doctor` hints.
 - **🌐 1-Click EN / RU UI & Hardened Security (`v3.6`):** Instant `RU` / `EN` dock switcher, `/lang`, and strict allowlisted MCP subprocess environments blocking Capri's `.env` keys and credential-bearing proxy URLs from leaking to third-party MCP servers.
-- **⚡ Quick Ask Bar & Memory 2.0 (`v3.5`):** Floating `640×82` Crimson Graphite prompt bar (`capri-deck --ask`) with `Ctrl+V` screenshots, `👁` region capture, `🎙` voice, `📌` workspace pinning (Niri/Hyprland), candidate-gated memory, BM25 + RU↔EN recall, rolling session summaries, and `/recall <query>`.
+- **⚡ Quick Ask Bar & Memory 2.0 (`v3.5–v3.8.2`):** Floating Crimson Graphite prompt bar (`capri-deck --ask`) with 4-edge/4-corner interactive resizing (`440–1120 px` width, double-click edge reset), automatic workarea edge lift & anchor restore, `Ctrl+V` screenshots, `👁` region capture, `🎙` voice, `📌` workspace pinning (Niri/Hyprland), candidate-gated memory, BM25 + RU↔EN recall, rolling session summaries, and `/recall <query>`.
 - **🧲 Living Physics & Spatial Wayland Avatar (`v3.3–v3.4`):** Native click-through `zwlr_layer_shell_v1` overlay with 60/125 FPS drag & ballistic throws, magnetic window-shelf perching (Niri & Hyprland), multi-monitor hotplug & cross-screen throws, audio-reactive projection rings, and drop-in custom sprites in `~/.config/capri/sprites/`.
 - **🛡️ Fail-Closed Tool Security (`SAFE / ASK / TRUSTED`):** Every shell, filesystem, memory, browser, and external **MCP (stdio JSON-RPC 2.0)** call passes through `ToolPolicyEngine` with interactive approval dialogs, SSRF protection, and redacted `/bugreport` exports.
 
@@ -58,7 +58,14 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 | **Niri / Hyprland** *(or Sway / wlroots)* | **Target WM** | `niri` or `hyprland` | `niri` or `hyprland` | Full WM integration (window shelves, Game Mode, workspace follow, `/wm-rules`) |
 | **Chromium / Brave** | Optional | `chromium` | `chromium` | Headless JS rendering (`--js`) in the isolated browser |
 
-> **Compositor support:** **Niri** and **Hyprland** on Arch / CachyOS / Fedora + PipeWire are the primary, fully tested targets (window-shelf perching, Game Mode, sticky Quick Ask workspace-following, and `/wm-rules`). On **other wlroots compositors** such as **Sway** or **River**, the native `zwlr_layer_shell_v1` click-through desktop avatar, 2D physics, multi-monitor output switching, chat, voice, memory, MCP, and browser work out of the box, while Niri/Hyprland-specific window-shelf IPC, Game Mode, workspace pinning, and `/wm-rules` gracefully fall back without errors.
+### 🧭 Compositor Support Matrix
+
+| Environment | Layer-Shell 2D Avatar (Python & Rust) | Window-Shelf Perching & Game Mode | Sticky Quick Ask (`📌`) & Smart Edge Lift | `/wm-rules` Auto-Setup |
+|---|---|---|---|---|
+| **Niri** *(Arch / CachyOS / Fedora)* | Full | Full | Full | Full (`config.kdl`) |
+| **Hyprland** *(classic & 0.56+/0.57+ Lua, incl. `end-4` / `quickshell`)* | Full | Full | Full | Full (`*.conf` / `*.lua`) |
+| **Sway / River / other wlroots** | Full | Graceful fallback | Floating window | Manual |
+| **KDE / GNOME / X11** | Fallback floating window (experimental) | Not supported | Floating window | Manual |
 
 ---
 
@@ -204,5 +211,5 @@ Destructive patterns (`rm -rf /`, `mkfs`, `dd of=/dev/...`, `curl | sh`, `shutdo
 - **Capri Linux source code:** licensed under the **MIT License** — see [`LICENSE`](LICENSE).
 - **Visual assets, sprites, 3D model & audio (`capri/assets/`):** NOT covered by MIT; strictly for non-commercial personal use with attribution — see [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 - **Unofficial fan project:** Capri Linux is not affiliated with or endorsed by **CD PROJEKT RED**, **Studio Trigger**, or **Netflix**.
-- Inspiration & credits: *Cyberpunk: Edgerunners 2* and the open-source companion project [`lachydotmcg/capri-desktop`](https://github.com/lachydotmcg/capri-desktop) (**PolyForm Noncommercial License 1.0.0**).
+- Inspiration & credits: *Cyberpunk: Edgerunners 2* and the companion project [`lachydotmcg/capri-desktop`](https://github.com/lachydotmcg/capri-desktop) (**PolyForm Noncommercial License 1.0.0**).
 - Full release history: [`CHANGELOG.md`](CHANGELOG.md).

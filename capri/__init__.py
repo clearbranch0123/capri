@@ -1,6 +1,6 @@
 """
 CAPRI // Cyberpunk AI Companion for Linux (Niri Wayland / Hyprland / Arch / CachyOS / Fedora)
-Construct Relic Engram — NATIVE RUST 2D AVATAR BACKEND & HYPRLAND POLISH (v3.8.1)
+Construct Relic Engram — NATIVE RUST 2D AVATAR BACKEND, HYPRLAND POLISH & QUICK ASK RESIZE (v3.8.2)
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-__version__ = "3.8.1"
+__version__ = "3.8.2"
 __app_name__ = "Capri"
 __codename__ = "Project Capricorn // Relic Engram"
 __author__ = "D"

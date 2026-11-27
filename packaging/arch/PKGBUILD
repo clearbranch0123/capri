@@ -1,6 +1,6 @@
 # Maintainer: D <clearbranch0123@users.noreply.github.com>
 pkgname=capri-companion
-pkgver=3.8.1
+pkgver=3.8.2
 pkgrel=1
 pkgdesc="Cyberpunk local-first AI companion for Wayland (Niri / Hyprland / wlroots) & PipeWire"
 arch=('any')

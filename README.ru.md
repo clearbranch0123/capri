@@ -2,7 +2,7 @@
 
 🇬🇧 **[English](README.md)** · 🇷🇺 **Русский**
 
-[![Version](https://img.shields.io/badge/version-v3.8.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.1)
+[![Version](https://img.shields.io/badge/version-v3.8.2-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.2)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/Tests-313%2F313%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
@@ -11,7 +11,7 @@
 [![Code License](https://img.shields.io/badge/Code%20License-MIT-4ed8e8.svg?style=for-the-badge)](LICENSE)
 [![Assets Notice](https://img.shields.io/badge/Assets-Noncommercial-e8ad52.svg?style=for-the-badge)](ASSETS_NOTICE.md)
 
-> **Неофициальный фан-проект и лицензия:** Capri Linux — независимый некоммерческий open-source фан-проект; он **не связан с CD PROJEKT RED, Studio Trigger или Netflix** и не является их официальным продуктом. Лицензия MIT ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
+> **Неофициальный фан-проект и лицензия:** Capri Linux — независимый некоммерческий фан-проект; он **не связан с CD PROJEKT RED, Studio Trigger или Netflix** и не является их официальным продуктом. Лицензия **MIT** ([`LICENSE`](LICENSE)) распространяется **только на исходный код**; визуальные и аудио-ассеты в `capri/assets/` имеют отдельные некоммерческие условия **PolyForm Noncommercial 1.0.0** — см. [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 
 Десктопный ИИ-компаньон под Linux с каноничной основой энграммы **Project Capricorn** (*Soul & Canon*), потоковым **Voice 3.0**, инструментами **Dev & Focus Companion** (`capri --watch`, `/pomodoro`), нативной интеграцией **Arch / CachyOS** (`PKGBUILD` и `systemd --user`), плавающей мини-строкой **Quick Ask Bar** (`capri-deck --ask`), гибридной памятью **Memory & Context 2.0**, 1-клик переключением языка **RU / EN**, живым физическим Wayland-аватаром (*Living Physics & Spatial 2.0*) и единой дизайн-системой **Crimson Graphite**. История диалогов (`sessions.db`), долговременная память (`memory.json`, `pending_memory.json`), эмоциональный профиль (`emotion.json`) и API-ключи (`.env`) хранятся локально на вашем ПК. При использовании облачных API выбранному вами провайдеру передаются только данные конкретного сервиса: для LLM — системный промпт, активный контекст диалога и подтверждённые факты памяти; для STT — аудиофрагмент речи; для TTS — текст ответа для озвучивания; для Vision — скриншот или прикреплённое изображение. Для локальной обработки чата и речи поддерживаются локальные OpenAI-совместимые серверы (Ollama / LM Studio) и локальные движки STT/TTS (при этом опциональные сетевые функции — веб-поиск, изолированный браузер и внешние MCP-серверы со строгой изоляцией окружения — управляются отдельно через конфиг и политику инструментов).
 
@@ -44,7 +44,14 @@
 | **Niri / Hyprland** *(или Sway / wlroots)* | **Целевой WM** | `niri` или `hyprland` | `niri` или `hyprland` | Полная интеграция: полки окон, Game Mode, следование Quick Ask, `/wm-rules` |
 | **Chromium / Brave** | Опционально | `chromium` | `chromium` | JS-рендеринг (`--js`) в изолированном браузере |
 
-> **Поддержка композиторов:** официально протестированное целевое окружение — **Arch / CachyOS / Fedora + Niri или Hyprland + PipeWire** (полки окон, Game Mode, следование Quick Ask по воркспейсам, `/wm-rules`). На **других wlroots-композиторах** (например, **Sway** или **River**) работают нативный click-through слой `zwlr_layer_shell_v1` аватара, 2D-физика, переключение мониторов, чат, голос, память, MCP и изолированный браузер; специфичные для Niri/Hyprland оконные функции, Game Mode, закрепление Quick Ask и `/wm-rules` мягко отключаются без ошибок.
+### 🧭 Таблица поддержки композиторов
+
+| Окружение | Layer-Shell 2D-аватар (Python и Rust) | Полки окон и Game Mode | Закрепление Quick Ask (`📌`) и подъём от края | Автонастройка `/wm-rules` |
+|---|---|---|---|---|
+| **Niri** *(Arch / CachyOS / Fedora)* | Полная | Полная | Полная | Полная (`config.kdl`) |
+| **Hyprland** *(классический и 0.56+/0.57+ Lua, вкл. `end-4` / `quickshell`)* | Полная | Полная | Полная | Полная (`*.conf` / `*.lua`) |
+| **Sway / River / прочие wlroots** | Полная | Мягкий fallback | Плавающее окно | Вручную |
+| **KDE / GNOME / X11** | Резервное окно (экспериментально) | Не поддерживается | Плавающее окно | Вручную |
 
 ---
 
@@ -149,7 +156,7 @@ Quick Ask доступен напрямую из UI (`⚡` в шапке Cyberde
 - **Диагностика, язык и сервис:** `/doctor`, `/bugreport`, `/setup`, `/policy`, `/lang [ru|en]`, `/service [status|install|uninstall]`, `/profile export`, `/profile restore <zip>`, `capri --watch "<cmd>"`.
 - **Память, фокус и контекст:** `/new`, `/sessions`, `/recall <запрос>` *(единый поиск по памяти и прошлым сессиям)*, `/pomodoro [25|50|15|off]` *(фокус-таймер + режим тишины)*, `/memory` (`/workbench`, `pending`, `approve <id>`, `reject <id>`), `/context`, `/initiative`, `/mood`, `/mode [normal|focus|playful|quiet]`.
 - **Интеграции v3.x:** `/mcp [status|connect|disconnect|tools]` *(асинхронное неблокирующее подключение со строгой изоляцией окружения)*, `/browser [url|search|link|status|clear]`, `/call [join|leave|status]`, `/bargein [on|off|threshold|aec on]`, `/gamemode [auto|on|off]`, `/wm-rules`, `/look`.
-- **Живой аватар и Quick Ask (`v3.5–v3.6`):** **ЛКМ** — перетаскивание и баллистический бросок по экрану (с посадкой на верхние грани окон и бесшовным перелётом через стыки соседних мониторов); **Shift + отпускание ЛКМ** — закрепить в воздухе; **ПКМ** — карточка быстрого управления **Crimson Graphite** (`⚡ Быстрый вопрос`, `⏱ Фокус`, позы, физика, автономная жизнь, переключение мониторов `DP-1 / HDMI-A-1`, `🎙 Голос`, `👁 Область`, `◈ Релик`, выключение аватара); плавающий **Quick Ask Bar** с кнопкой `📌` автоматически следует за вами по всем рабочим столам Niri/Hyprland без перехвата фокуса; свои спрайты (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, опциональный `poses.json`) можно положить в `~/.config/capri/sprites/`.
+- **Живой аватар и Quick Ask (`v3.5–v3.8.2`):** **ЛКМ** — перетаскивание и баллистический бросок по экрану (с посадкой на верхние грани окон и бесшовным перелётом через стыки соседних мониторов); **Shift + отпускание ЛКМ** — закрепить в воздухе; **ПКМ** — карточка быстрого управления **Crimson Graphite** (`⚡ Быстрый вопрос`, `⏱ Фокус`, позы, физика, автономная жизнь, переключение мониторов `DP-1 / HDMI-A-1`, `🎙 Голос`, `👁 Область`, `◈ Релик`, выключение аватара); плавающий **Quick Ask Bar** поддерживает масштабирование за все 4 грани и 4 угла (`440–1120 px`, двойной клик по краю — сброс), плавный подъём от края экрана при раскрытии ответа и кнопку `📌` для следования по воркспейсам Niri/Hyprland; свои спрайты (`drag.png`, `fall.png`, `splat.png`, `lounge.png`, `walk.png`, опциональный `poses.json`) можно положить в `~/.config/capri/sprites/`.
 
 ---
 
@@ -189,5 +196,5 @@ Quick Ask доступен напрямую из UI (`⚡` в шапке Cyberde
 - **Исходный код Capri Linux:** распространяется под лицензией **MIT** — см. [`LICENSE`](LICENSE).
 - **Ассеты, спрайты, 3D-модель и аудио (`capri/assets/`):** НЕ покрываются лицензией MIT и предназначены строго для некоммерческого использования с указанием авторства — подробный перечень в [`ASSETS_NOTICE.md`](ASSETS_NOTICE.md).
 - **Неофициальный фан-проект:** Capri Linux не связан с **CD PROJEKT RED**, **Studio Trigger** или **Netflix** и не одобрен ими.
-- Вдохновение и благодарности: *Cyberpunk: Edgerunners 2* и open-source проект [`lachydotmcg/capri-desktop`](https://github.com/lachydotmcg/capri-desktop) (**PolyForm Noncommercial License 1.0.0**).
+- Вдохновение и благодарности: *Cyberpunk: Edgerunners 2* и проект [`lachydotmcg/capri-desktop`](https://github.com/lachydotmcg/capri-desktop) (**PolyForm Noncommercial License 1.0.0**).
 - Полная история релизов: [`CHANGELOG.md`](CHANGELOG.md).

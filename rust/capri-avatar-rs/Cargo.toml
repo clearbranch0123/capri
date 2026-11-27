@@ -1,6 +1,6 @@
 [package]
 name = "capri-avatar-rs"
-version = "3.8.1"
+version = "3.8.2"
 edition = "2021"
 description = "Experimental native Rust Wayland zwlr_layer_shell_v1 2D avatar daemon for Capri"
 license = "MIT"
