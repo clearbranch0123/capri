@@ -40,8 +40,8 @@ optdepends=(
     'chromium: optional JS rendering (--js) in the isolated browser'
 )
 source=("capri-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-# Pinned after publishing the v3.8.1 tag archive (refresh via `updpkgsums` / `makepkg -g`).
-sha256sums=('SKIP')
+# Pinned to the published v3.8.1 tag archive SHA-256 (refresh via `updpkgsums` / `makepkg -g` after tagging a new release).
+sha256sums=('09d292561ae0ebb6ad33f3141ef5dd1bb426962149cbeed9b194e0112938a1c8')
 
 build() {
     cd "${srcdir}/capri-${pkgver}"
