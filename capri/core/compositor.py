@@ -868,11 +868,17 @@ class CompositorBackend:
             if isinstance(wins, list):
                 for w in wins:
                     if isinstance(w, dict) and (w.get("title") or "") == target:
+                        layout = w.get("layout") if isinstance(w.get("layout"), dict) else {}
+                        pos = layout.get("tile_pos_in_workspace_view")
+                        wx = int(round(float(pos[0]))) if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None
+                        wy = int(round(float(pos[1]))) if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None
                         return {
                             "id": w.get("id"),
                             "workspace_id": w.get("workspace_id"),
                             "is_floating": bool(w.get("is_floating", False)),
                             "is_focused": bool(w.get("is_focused", False)),
+                            "x": wx,
+                            "y": wy,
                         }
             return None
         if k == "hyprland":
@@ -886,12 +892,17 @@ class CompositorBackend:
                     for c in clients:
                         if isinstance(c, dict) and (c.get("title") or "") == target:
                             ws = c.get("workspace") or {}
+                            at = c.get("at")
+                            wx = int(round(float(at[0]))) if isinstance(at, (list, tuple)) and len(at) >= 2 else None
+                            wy = int(round(float(at[1]))) if isinstance(at, (list, tuple)) and len(at) >= 2 else None
                             return {
                                 "id": c.get("address"),
                                 "workspace_id": ws.get("id") if isinstance(ws, dict) else None,
                                 "is_floating": bool(c.get("floating", False)),
                                 "is_focused": bool(c.get("focusHistoryID", 1) == 0),
                                 "is_pinned": bool(c.get("pinned", False)),
+                                "x": wx,
+                                "y": wy,
                             }
         return None
 
@@ -1040,12 +1051,55 @@ class CompositorBackend:
                 return False
             resp = _hyprland_socket_command(f"dispatch movewindowpixel exact {int(x)} {int(y)},address:{addr}")
             if resp is not None:
-                return resp.strip().lower() == "ok"
+                if resp.strip().lower() == "ok":
+                    return True
+                # Hyprland 0.56+/0.57+ Lua config mode uses `hl.dsp.window.move(...)`
+                if "hl.dispatch" in resp or resp.strip().lower().startswith("error"):
+                    lua_resp = _hyprland_socket_command(
+                        f'dispatch hl.dsp.window.move({{ x = {int(x)}, y = {int(y)}, exact = true, window = "address:{addr}" }})'
+                    )
+                    return lua_resp is not None and lua_resp.strip().lower() == "ok"
+                return False
             code, _, _ = _run_sync(
                 ["hyprctl", "dispatch", "movewindowpixel", f"exact {int(x)} {int(y)},address:{addr}"]
             )
             return code == 0
         return False
+
+    def keep_floating_window_in_workarea_sync(
+        self,
+        exact_title: str,
+        target_w: int,
+        target_h: int,
+        *,
+        margin: int = 12,
+    ) -> Optional[tuple[int, int, int, int]]:
+        """
+        Keep a floating helper window (e.g. 'Capri Quick Ask') 100% inside the active monitor's
+        usable workarea when its size grows (e.g. expanding the response drawer near the bottom edge).
+        Returns `(old_x, old_y, new_x, new_y)` if the window was lifted/clamped, else `None`.
+        """
+        if self.kind not in ("niri", "hyprland"):
+            return None
+        win = self.find_window_by_title_sync(exact_title)
+        if win is None or win.get("id") is None:
+            return None
+        wx = win.get("x")
+        wy = win.get("y")
+        if wx is None or wy is None:
+            return None
+        mon = self.get_monitor_for_point(float(wx) + float(target_w) * 0.5, float(wy) + 40.0)
+        min_x = int(round(mon.work_left)) + int(margin)
+        max_x = max(min_x, int(round(mon.work_right)) - int(margin) - int(target_w))
+        min_y = int(round(mon.work_top)) + int(margin)
+        max_y = max(min_y, int(round(mon.work_bottom)) - int(margin) - int(target_h))
+        new_x = max(min_x, min(max_x, int(wx)))
+        new_y = max(min_y, min(max_y, int(wy)))
+        if new_x == int(wx) and new_y == int(wy):
+            return None
+        if self.move_floating_window_exact_sync(win["id"], new_x, new_y):
+            return (int(wx), int(wy), new_x, new_y)
+        return None
 
     # ── Async IPC (for tools/desktop.py & agent tools) ──────────────────────
     async def async_list_windows(self) -> list[dict[str, Any]]:

@@ -69,7 +69,7 @@ class CapriQuickAskBar(QWidget):
     MAX_BAR_WIDTH = 1120
     MIN_COMPACT_HEIGHT = 78
     MAX_COMPACT_HEIGHT = 124
-    MIN_EXPANDED_HEIGHT = 210
+    MIN_EXPANDED_HEIGHT = 248
     MAX_EXPANDED_HEIGHT = 680
     RESIZE_MARGIN = 14
     CORNER_MARGIN = 20
@@ -109,6 +109,7 @@ class CapriQuickAskBar(QWidget):
         self._resize_edges: Qt.Edge = Qt.Edge(0)
         self._resize_start_global: Optional[QPoint] = None
         self._resize_start_geom: Optional[QRect] = None
+        self._pre_lift_anchor: Optional[tuple[int, int]] = None
         self._compositor = None
 
         self._copy_reset_timer = QTimer(self)
@@ -267,6 +268,7 @@ class CapriQuickAskBar(QWidget):
         # ── Compact Live Response Drawer (hidden until active) ─────────────
         self.response_panel = QFrame(self.card)
         self.response_panel.setObjectName("quickAskResponse")
+        self.response_panel.setMinimumHeight(136)
         self.response_panel.setStyleSheet(f"""
             QFrame#quickAskResponse {{
                 background: {COLORS.surface_alt};
@@ -298,7 +300,7 @@ class CapriQuickAskBar(QWidget):
         self.txt_response = QTextEdit(self.response_panel)
         self.txt_response.setReadOnly(True)
         self.txt_response.setFrameShape(QFrame.Shape.NoFrame)
-        self.txt_response.setMinimumHeight(64)
+        self.txt_response.setMinimumHeight(56)
         self.txt_response.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.txt_response.setStyleSheet(f"""
             QTextEdit {{
@@ -576,6 +578,73 @@ class CapriQuickAskBar(QWidget):
         finally:
             self._syncing_size = False
 
+    def _update_responsive_placeholder(self) -> None:
+        """Keep placeholder clean without ellipsis collision when resized to narrow widths."""
+        if self._bar_width < 520:
+            txt = tr_ui("Спросить Капри…", "Ask Capri…", lang=self._lang)
+        else:
+            txt = tr_ui(
+                "Спросить Капри…  Enter — отправить · Ctrl+V — скрин · Esc — скрыть",
+                "Ask Capri…  Enter — send · Ctrl+V — screenshot · Esc — hide",
+                lang=self._lang,
+            )
+        if self.input_edit.placeholderText() != txt:
+            self.input_edit.setPlaceholderText(txt)
+
+    def _snapshot_pre_expand_anchor(self) -> None:
+        """Capture exact compact-bar compositor position before Wayland center-resizes on expand."""
+        if self._pre_lift_anchor is not None or not self.isVisible() or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        comp = self._get_compositor()
+        if comp is None or getattr(comp, "kind", "unknown") not in ("niri", "hyprland"):
+            return
+        try:
+            win = comp.find_window_by_title_sync(self.windowTitle())
+            if win is not None and win.get("x") is not None and win.get("y") is not None:
+                self._pre_lift_anchor = (int(win["x"]), int(win["y"]))
+        except Exception:
+            pass
+
+    def _keep_inside_workarea(self, target_w: int, target_h: int) -> None:
+        """Smoothly lift/shift Quick Ask inside the active monitor workarea so expanding never clips off-screen."""
+        if not self.isVisible() or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        comp = self._get_compositor()
+        if comp is None or getattr(comp, "kind", "unknown") not in ("niri", "hyprland"):
+            return
+        try:
+            moved = comp.keep_floating_window_in_workarea_sync(self.windowTitle(), target_w, target_h, margin=12)
+            if moved is not None and self._pre_lift_anchor is None:
+                old_x, old_y, _nx, _ny = moved
+                self._pre_lift_anchor = (old_x, old_y)
+        except Exception:
+            pass
+
+    def _restore_pre_lift_anchor(self, target_w: int, target_h: int) -> None:
+        """Glide the compact bar back down to the user's parked bottom/edge spot after collapsing."""
+        anchor = self._pre_lift_anchor
+        self._pre_lift_anchor = None
+        if anchor is None or not self.isVisible() or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        comp = self._get_compositor()
+        if comp is None or getattr(comp, "kind", "unknown") not in ("niri", "hyprland"):
+            return
+        try:
+            win = comp.find_window_by_title_sync(self.windowTitle())
+            if win is None or win.get("id") is None:
+                return
+            orig_x, orig_y = anchor
+            mon = comp.get_monitor_for_point(float(orig_x) + float(target_w) * 0.5, float(orig_y) + 40.0)
+            min_x = int(round(mon.work_left)) + 12
+            max_x = max(min_x, int(round(mon.work_right)) - 12 - int(target_w))
+            min_y = int(round(mon.work_top)) + 12
+            max_y = max(min_y, int(round(mon.work_bottom)) - 12 - int(target_h))
+            dst_x = max(min_x, min(max_x, int(orig_x)))
+            dst_y = max(min_y, min(max_y, int(orig_y)))
+            comp.move_floating_window_exact_sync(win["id"], dst_x, dst_y)
+        except Exception:
+            pass
+
     def _sync_compact_size(self) -> None:
         """Apply strict min/max size locks and smoothly fit compact or expanded Quick Ask geometry."""
         has_attach = bool(self._attachments)
@@ -583,6 +652,7 @@ class CapriQuickAskBar(QWidget):
         min_w, max_w, min_h, max_h = self._size_bounds()
 
         self._bar_width = max(min_w, min(max_w, int(self._bar_width)))
+        self._update_responsive_placeholder()
 
         if has_resp:
             if self._custom_expanded_height is not None:
@@ -606,16 +676,21 @@ class CapriQuickAskBar(QWidget):
         self._syncing_size = True
         try:
             if self.isVisible() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                if has_resp and self._pre_lift_anchor is None:
+                    self._snapshot_pre_expand_anchor()
                 # On Wayland (Hyprland / Niri), briefly lock min==max so the compositor applies the
                 # exact programmatic expand/collapse/reset size, then re-open bounded resize limits.
                 self.setFixedSize(self._bar_width, target_h)
                 QTimer.singleShot(50, self._unlock_resize_bounds)
+                if has_resp:
+                    QTimer.singleShot(45, lambda w=self._bar_width, h=target_h: self._keep_inside_workarea(w, h))
             else:
                 self.setMinimumSize(min_w, min_h)
                 self.setMaximumSize(max_w, max_h)
                 self.resize(self._bar_width, target_h)
         finally:
             self._syncing_size = False
+        return target_h
 
     def position_on_active_screen(self) -> None:
         screen = None
@@ -896,13 +971,7 @@ class CapriQuickAskBar(QWidget):
     def set_language(self, lang: str) -> None:
         norm = "en" if str(lang or "").strip().lower().startswith("en") else "ru"
         self._lang = norm
-        self.input_edit.setPlaceholderText(
-            tr_ui(
-                "Спросить Капри…  Enter — отправить · Ctrl+V — скрин · Esc — скрыть",
-                "Ask Capri…  Enter — send · Ctrl+V — screenshot · Esc — hide",
-                lang=norm,
-            )
-        )
+        self._update_responsive_placeholder()
         if not self._copy_reset_timer.isActive():
             self.btn_copy.setText(tr_ui("Копировать", "Copy", lang=norm))
         self.btn_collapse.setText(tr_ui("Свернуть", "Collapse", lang=norm))
@@ -919,7 +988,9 @@ class CapriQuickAskBar(QWidget):
         self.txt_response.clear()
         self.response_panel.hide()
         self._set_emblem_color(COLORS.crimson)
-        self._sync_compact_size()
+        target_h = self._sync_compact_size()
+        if self._pre_lift_anchor is not None:
+            QTimer.singleShot(70, lambda w=self._bar_width, h=target_h: self._restore_pre_lift_anchor(w, h))
         self.input_edit.setFocus()
 
     # ── Event Handlers ─────────────────────────────────────────────────────
@@ -1100,6 +1171,7 @@ class CapriQuickAskBar(QWidget):
                 self._resize_start_geom = self.geometry()
                 event.accept()
                 return
+            self._pre_lift_anchor = None
             if wh is not None and wh.startSystemMove():
                 event.accept()
                 return
@@ -1141,6 +1213,7 @@ class CapriQuickAskBar(QWidget):
             return
         min_w, max_w, min_h, max_h = self._size_bounds()
         self._bar_width = max(min_w, min(max_w, self.width()))
+        self._update_responsive_placeholder()
         if self.response_panel.isHidden():
             self._custom_compact_height = max(min_h, min(max_h, self.height()))
         else:

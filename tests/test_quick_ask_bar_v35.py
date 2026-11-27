@@ -458,5 +458,39 @@ def test_quick_ask_bar_edge_corner_resizing_and_strict_min_max_locks(monkeypatch
         bar.reset_size()
         assert bar.width() == CapriQuickAskBar.DEFAULT_BAR_WIDTH
         assert bar._custom_expanded_height is None
+
+        # Narrow width switches placeholder to short form so it never clips with double ellipsis
+        bar._bar_width = CapriQuickAskBar.MIN_BAR_WIDTH
+        bar._update_responsive_placeholder()
+        assert bar.input_edit.placeholderText() == "Спросить Капри…"
     finally:
         bar.close()
+
+    # Compositor smart lift: expanding Quick Ask parked near bottom edge lifts it inside monitor workarea
+    from capri.core.compositor import CompositorBackend, MonitorWorkArea
+
+    move_cmds: list[str] = []
+
+    def _fake_hypr_lift(cmd, timeout=0.25):
+        move_cmds.append(cmd)
+        if cmd == "j/clients":
+            return (
+                '[{"address":"0x55cafe","title":"Capri Quick Ask","workspace":{"id":4},'
+                '"floating":true,"focusHistoryID":0,"pinned":true,"at":[1200,980]}]'
+            )
+        if cmd.startswith("dispatch movewindowpixel"):
+            return 'error: 3 [string "return hl.dispatch(...)"]:1: \')\' expected'
+        if cmd.startswith("dispatch hl.dsp.window.move"):
+            return "ok"
+        return "ok"
+
+    monkeypatch.setattr("capri.core.compositor._hyprland_socket_command", _fake_hypr_lift)
+    hcomp = CompositorBackend(forced_kind="hyprland")
+    monkeypatch.setattr(
+        hcomp,
+        "get_monitor_for_point",
+        lambda _x, _y: MonitorWorkArea(name="DP-1", x=0.0, y=0.0, width=1920.0, height=1080.0, reserved_top=45.0, is_focused=True),
+    )
+    shifted = hcomp.keep_floating_window_in_workarea_sync("Capri Quick Ask", 640, 300, margin=12)
+    assert shifted == (1200, 980, 1200, 768)
+    assert any('hl.dsp.window.move({ x = 1200, y = 768, exact = true, window = "address:0x55cafe" })' in c for c in move_cmds)
