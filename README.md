@@ -1,10 +1,10 @@
-# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.6 — Voice 3.0, Focus Companion & Arch Ecosystem)
+# ⚡ CAPRI // Cyberpunk AI Companion for Linux (v3.8 — Native Rust 2D Avatar Backend & Multi-Monitor)
 
 🇬🇧 **English** · 🇷🇺 **[Русский](README.ru.md)**
 
-[![Version](https://img.shields.io/badge/version-v3.7.3-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.7.3)
+[![Version](https://img.shields.io/badge/version-v3.8.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.0)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-310%2F310%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-312%2F312%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
@@ -21,6 +21,8 @@ Chat history (`sessions.db`), long-term memory (`memory.json`, `pending_memory.j
 
 ## ✨ Highlights
 
+- **🦀 Opt-in Native Rust 2D Avatar (`v3.8`):** Experimental standalone `capri-avatar-rs` Wayland `zwlr_layer_shell_v1` daemon (`rust/capri-avatar-rs/`, **~24 MB RSS / ~20 MB PSS**, **1 thread**, **~38 ms** first frame, **1.6 MB** binary) speaking Capri's hardened `v: 1` NDJSON IPC with persistent double-buffered `wl_shm` slots, multi-monitor switching, hotplug fallback, cross-screen ballistic throws, and a compact native Crimson Graphite RMB menu; selectable via Settings, `/avatar rust`, `--backend rust`, or `ui.avatar_backend: rust` with automatic fallback to Python if not built (`cargo build --release --manifest-path rust/capri-avatar-rs/Cargo.toml`).
+- **⚡ Performance, Hardened IPC & Policy Guard (`v3.7`):** Lazy package/sprite loading + adaptive avatar redraw timer (~57% lower idle RAM, ~63% faster startup, ~67% lower idle CPU), per-user `$XDG_RUNTIME_DIR/capri/avatar.sock` (`0700`/`0600`) with `flock` singleton lock, `SO_PEERCRED` peer UID verification, and versioned `v: 1` NDJSON framing, plus strict `TRUSTED` allowlists and symlink-aware protection for shell dotfiles and Niri/Hyprland configs.
 - **🎙️ Voice 3.0 (`v3.6`):** Eager first-clause splitting, true sliding-window TTS prefetch (`max_prefetch=3`) with instant barge-in cleanup, real 8/16/24/32-bit PCM WAV envelope decoding, and a non-blocking 25 Hz hologram aura dispatcher.
 - **⏱️ Dev & Focus Companion (`v3.6`):** `capri --watch "<cmd>"` wraps long builds/tests with native TTY passthrough, exact exit codes, and voice/avatar completion alerts; `/pomodoro [25|50|15|off]` (and the avatar card) adds a lilac holographic progress ring under Capri's heels with an automatic silence gate.
 - **📦 Arch / CachyOS Ecosystem & Modular Packaging (`v3.6`):** Ready-to-build [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD), opt-in `systemd --user` service (`capri --service install`) with compositor-restart auto-reconnect, modular `pyproject.toml` extras (`[voice]`, `[local-stt]`, `[vision]`, `[web]`, `[all]`), and enhanced `/doctor` hints.

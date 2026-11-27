@@ -214,6 +214,7 @@ class UIConfig(BaseModel):
     language: str = "ru"  # "ru" or "en"
     avatar_enabled: bool = True
     avatar_mode: str = "2d"  # "2d" or "3d"
+    avatar_backend: str = "python"  # "python" (default) or "rust" (experimental native Wayland 2D)
     avatar_size: int = 240
     reduced_motion: bool = False
     minimize_to_tray: bool = True

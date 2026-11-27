@@ -2379,15 +2379,75 @@ def wait_for_wayland_socket(
         time.sleep(max(0.01, float(poll_interval)))
 
 
+def _resolve_rust_avatar_binary() -> Optional[Path]:
+    """Locate the optional native Rust `capri-avatar-rs` binary if built or installed on PATH."""
+    import shutil
+
+    override = os.environ.get("CAPRI_AVATAR_RS_BIN", "").strip()
+    if override:
+        cand = Path(override).expanduser()
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return cand
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    for rel in (
+        Path("rust") / "capri-avatar-rs" / "target" / "release" / "capri-avatar-rs",
+        Path("rust") / "capri-avatar-rs" / "target" / "debug" / "capri-avatar-rs",
+    ):
+        cand = repo_root / rel
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return cand
+    found = shutil.which("capri-avatar-rs")
+    return Path(found) if found else None
+
+
+def _resolve_requested_avatar_backend(cli_backend: Optional[str]) -> str:
+    """Resolve effective avatar backend: CLI flag > env var > config.ui.avatar_backend > python."""
+    raw = (cli_backend or os.environ.get("CAPRI_AVATAR_BACKEND", "")).strip().lower()
+    if not raw:
+        try:
+            raw = str(getattr(load_config().ui, "avatar_backend", "python") or "python").strip().lower()
+        except Exception:
+            raw = "python"
+    return "rust" if raw == "rust" else "python"
+
+
 def launch_avatar():
     from .. import __version__
     parser = argparse.ArgumentParser(prog="capri-avatar", description="Capri Desktop Avatar Overlay")
     parser.add_argument("--version", "-v", action="version", version=f"Capri Avatar Overlay v{__version__}")
     parser.add_argument("--mode", default="2d", choices=["2d", "3d"])
+    parser.add_argument(
+        "--backend",
+        default=None,
+        choices=["python", "rust"],
+        help="Avatar runtime backend (default: config ui.avatar_backend or python; experimental: rust with python fallback)",
+    )
     parser.add_argument("--parent-pid", type=int, default=None)
     parser.add_argument("--systemd", action="store_true", help="Run under systemd --user with compositor-restart auto-reconnect")
     parser.add_argument("--wait-wayland", type=float, default=None, help="Seconds to wait for Wayland socket before starting")
     args, _ = parser.parse_known_args()
+
+    effective_backend = _resolve_requested_avatar_backend(args.backend)
+    if effective_backend == "rust":
+        if args.mode != "2d":
+            print("capri-avatar: --backend rust supports --mode 2d only; falling back to python.", file=sys.stderr)
+        else:
+            rust_bin = _resolve_rust_avatar_binary()
+            if rust_bin is None:
+                print(
+                    "capri-avatar: rust backend requested, but `capri-avatar-rs` binary was not found; "
+                    "falling back to python. (Build with: cargo build --release --manifest-path rust/capri-avatar-rs/Cargo.toml)",
+                    file=sys.stderr,
+                )
+            else:
+                argv = [str(rust_bin), "--mode", "2d"]
+                if args.parent_pid is not None:
+                    argv.extend(["--parent-pid", str(args.parent_pid)])
+                if args.systemd:
+                    argv.append("--systemd")
+                if args.wait_wayland is not None:
+                    argv.extend(["--wait-wayland", str(args.wait_wayland)])
+                os.execv(str(rust_bin), argv)
 
     wait_sec = args.wait_wayland if args.wait_wayland is not None else (15.0 if args.systemd else 0.0)
     if wait_sec > 0.0 and os.environ.get("QT_QPA_PLATFORM") != "offscreen":

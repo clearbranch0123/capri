@@ -3165,6 +3165,8 @@ class CapriCyberdeckWindow(QWidget):
             sender = tr_ui("Система", "System", lang=lang)
             if sub in ("install", "enable", "apply"):
                 res = install_avatar_service(
+                    mode=str(getattr(self.config.ui, "avatar_mode", "2d") or "2d"),
+                    backend=str(getattr(self.config.ui, "avatar_backend", "python") or "python"),
                     enable="--no-enable" not in parts,
                     start="--start" in parts or "--now" in parts,
                     dry_run="--dry-run" in parts,
@@ -4731,16 +4733,20 @@ class CapriCyberdeckWindow(QWidget):
         env["CAPRI_UI_LANG"] = ui_lang
         try:
             mode = getattr(self.config.ui, "avatar_mode", "2d")
+            backend = str(getattr(self.config.ui, "avatar_backend", "python") or "python").strip().lower()
+            cmd = [
+                sys.executable,
+                "-m",
+                "capri.ui.overlay",
+                "--mode",
+                mode,
+                "--parent-pid",
+                str(os.getpid()),
+            ]
+            if backend in ("python", "rust"):
+                cmd.extend(["--backend", backend])
             self.avatar_proc = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "capri.ui.overlay",
-                    "--mode",
-                    mode,
-                    "--parent-pid",
-                    str(os.getpid()),
-                ],
+                cmd,
                 cwd=str(proj_root),
                 env=env,
             )

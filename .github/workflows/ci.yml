@@ -49,3 +49,36 @@ jobs:
         run: |
           ./scripts/build_beta_release.sh
           cd dist && sha256sum -c SHA256SUMS.txt
+
+  rust-avatar-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/capri-avatar-rs/target/
+          key: ${{ runner.os }}-cargo-avatar-rs-${{ hashFiles('rust/capri-avatar-rs/Cargo.lock') }}
+
+      - name: Install Wayland / xkbcommon dev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libxkbcommon-dev
+
+      - name: Run Rust avatar unit tests
+        run: cargo test --locked --manifest-path rust/capri-avatar-rs/Cargo.toml
+
+      - name: Run Rust clippy strict audit
+        run: cargo clippy --locked --all-targets --manifest-path rust/capri-avatar-rs/Cargo.toml -- -D warnings

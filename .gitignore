@@ -17,6 +17,7 @@ config.yaml
 build/
 dist/
 *.egg-info/
+rust/*/target/
 *.tmp
 *.log
 .DS_Store

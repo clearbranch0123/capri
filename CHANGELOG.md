@@ -5,6 +5,24 @@
 
 ---
 
+## [3.8.0] — 2026-11-27 (Opt-in Native Rust 2D Avatar Backend & Multi-Monitor)
+
+Минорный релиз, добавляющий опциональный нативный Rust-демон 2D-аватара (`capri-avatar-rs`) для Wayland (`zwlr_layer_shell_v1`) с безопасным авто-фолбэком на Python и независимой CI-проверкой.
+
+### 🦀 Опциональный нативный Rust-бэкенд 2D-аватара (`rust/capri-avatar-rs/`)
+- **Лёгкий standalone-демон без Qt в фоне:** `smithay-client-toolkit` + `tiny-skia` + `fontdue` + ленивый загрузчик PNG-спрайтов (`idle` + `blink` на старте, остальные позы по требованию, поддержка `~/.config/capri/sprites/` и `poses.json`). На живом Niri (`wayland-1`): **~24.5 MB RSS / ~19.7 MB PSS**, **1 поток**, **~38 ms** до первого кадра, бинарь **1.6 MB**.
+- **100% совместимость с защищённым IPC `v: 1`:** `$XDG_RUNTIME_DIR/capri/avatar.sock` (`0700`/`0600`), `flock` singleton lock, `O_NOFOLLOW`, `SO_PEERCRED`, потоковый NDJSON-буфер 64 KiB, `state`/`text`/`mood`/`mouth_envelope`/`audio_level`/`focus_timer`/`power_saver`/`config_sync`/`locomotion` (`come`, `stay`, `follow`, `home`, `glide`, `teleport`) и корректный выход с кодом `1` под `--systemd` при обрыве композитора.
+- **2D-физика, мультимониторность и hotplug:** два постоянных `wl_shm`-буфера с привязкой `prev_rect` (без шлейфов), дробный 60 Гц аккумулятор тиков, плавный переход `Landing -> Idle`, посадка на окна Niri/Hyprland, переключение активного `wl_output`, перелёт броском через стык экранов и безопасное пересоздание поверхности на запасном мониторе при hotplug (с корректным сбросом `Grabbed`).
+- **Компактное нативное ПКМ-меню Crimson Graphite (`src/menu.rs`):** позы (`Обычная / Присест / Сон`), `Танец`, `Физика`, выбор монитора и делегирование в Cyberdeck (`Быстрый вопрос`, `Cyberdeck`, `Голос`, `Выход`).
+
+### ⚙️ Интеграция в Capri, CI и автопроверки
+- **Opt-in `ui.avatar_backend` (`python` по умолчанию | `rust`):** выбор в Настройках Cyberdeck, в CLI (`/avatar rust` / `/avatar python` с сохранением в `config.yaml`), `--backend rust` в `capri-avatar` и передача в `capri --service install` / `/service install` с автоматическим откатом на Python, если Rust-бинарь не собран.
+- **Независимая Rust-джоба в `.github/workflows/ci.yml` (`rust-avatar-ci`):** `cargo test --locked` + `cargo clippy --locked --all-targets -- -D warnings` отдельно от pure-Python сборки и wheel.
+- **Автоконтроль синхронизации версий (`tests/test_open_beta_release_engineering.py`):** проверка совпадения версий в `README.md`, `README.ru.md` (H1, бейдж, тег), `SECURITY.md` и `packaging/arch/PKGBUILD` с `capri.__version__`.
+- **Верификация релиза v3.8.0:** **312/312 Python tests + 15/15 Rust tests passed, 0 warnings**.
+
+---
+
 ## [3.7.3] — 2026-11-26 (Tool Registry Single-Arg Fix & End-to-End FS Policy Tests)
 
 Короткий bugfix-релиз, исправляющий ошибку разбора аргументов в `ToolRegistry.execute()` для инструментов с опциональными параметрами (включая `read_file`).

@@ -29,6 +29,7 @@ ui:
   avatar_autonomous_life: true
   avatar_enabled: true
   avatar_mode: 2d
+  avatar_backend: python
   avatar_physics_enabled: true
   avatar_reactions_enabled: true
   avatar_size: 240

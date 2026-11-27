@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-During the Open Beta phase, security fixes are applied to the latest `3.7.x` release on `main`:
+During the Open Beta phase, security fixes are applied to the latest `3.8.x` release on `main`:
 
 | Version | Supported |
 | ------- | --------- |
-| `3.7.x` | Yes |
-| `< 3.7.0` | No (please upgrade via `./setup.sh --upgrade`) |
+| `3.8.x` | Yes |
+| `< 3.8.0` | No (please upgrade via `./setup.sh --upgrade`) |
 
 ## Reporting a Vulnerability (Private Disclosure)
 

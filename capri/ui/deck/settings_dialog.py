@@ -328,6 +328,17 @@ class CapriProviderSettingsDialog(QDialog):
         self.chk_minimize_to_tray.setChecked(bool(getattr(self.config.ui, "minimize_to_tray", True)))
         tl.addWidget(self.chk_minimize_to_tray)
 
+        tl.addWidget(_field_label("Движок 2D-аватара (применится при следующем запуске аватара)"))
+        self.combo_avatar_backend = QComboBox()
+        self.combo_avatar_backend.setMinimumHeight(34)
+        self.combo_avatar_backend.addItem("Python / Qt (По умолчанию — полный набор функций)", "python")
+        self.combo_avatar_backend.addItem("Rust (Экспериментальный ~24 MB RAM, авто-фолбэк на Python)", "rust")
+        cur_backend = str(getattr(self.config.ui, "avatar_backend", "python") or "python").strip().lower()
+        b_idx = self.combo_avatar_backend.findData("rust" if cur_backend == "rust" else "python")
+        if b_idx >= 0:
+            self.combo_avatar_backend.setCurrentIndex(b_idx)
+        tl.addWidget(self.combo_avatar_backend)
+
         pref_layout.addWidget(toggles_frame)
         pref_layout.addStretch()
 
@@ -1152,6 +1163,7 @@ class CapriProviderSettingsDialog(QDialog):
         # UI
         self.config.ui.language = str(self.combo_ui_lang.currentData() or "ru")
         self.config.ui.avatar_enabled = self.chk_avatar_enabled.isChecked()
+        self.config.ui.avatar_backend = str(self.combo_avatar_backend.currentData() or "python")
         self.config.ui.auto_avatar_poses = self.chk_auto_avatar_poses.isChecked()
         self.config.ui.game_mode_enabled = self.chk_game_mode.isChecked()
         self.config.ui.reduced_motion = self.chk_reduced_motion.isChecked()

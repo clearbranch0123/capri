@@ -64,21 +64,24 @@ def kill_avatar():
         safe_unlink_owned_path(p)
 
 
-def spawn_avatar(mode: str = "2d") -> bool:
+def spawn_avatar(mode: str = "2d", backend: str | None = None) -> bool:
     """Запуск аватара с привязкой к родительскому процессу Kitty/main.py."""
     global avatar_proc
     kill_avatar()
     try:
+        cmd = [
+            sys.executable,
+            "-m",
+            "capri.ui.overlay",
+            "--mode",
+            mode,
+            "--parent-pid",
+            str(os.getpid()),
+        ]
+        if backend in ("python", "rust"):
+            cmd.extend(["--backend", backend])
         avatar_proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "capri.ui.overlay",
-                "--mode",
-                mode,
-                "--parent-pid",
-                str(os.getpid()),
-            ],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -177,7 +180,7 @@ async def main():
 
     # Автозапуск аватара при старте
     if config.ui.avatar_enabled:
-        spawn_avatar(config.ui.avatar_mode)
+        spawn_avatar(config.ui.avatar_mode, backend=getattr(config.ui, "avatar_backend", "python"))
         console.print(f"[dim cyan]Плавающий аватар Капри ({config.ui.avatar_mode.upper()}) запущен на рабочем столе Niri.[/dim cyan]\n")
 
     input_queue: asyncio.Queue = asyncio.Queue()
@@ -620,14 +623,21 @@ async def main():
                         config.ui.avatar_mode = "2d"
                         config.ui.avatar_enabled = True
                         if not set_avatar_mode("2d"):
-                            spawn_avatar("2d")
+                            spawn_avatar("2d", backend=getattr(config.ui, "avatar_backend", "python"))
                         console.print("[cyan]Аватар переключен в 2D режим (HUD-спрайты).[/cyan]")
                     elif sub in ("3d", "mesh", "model"):
                         config.ui.avatar_mode = "3d"
                         config.ui.avatar_enabled = True
                         if not set_avatar_mode("3d"):
-                            spawn_avatar("3d")
+                            spawn_avatar("3d", backend="python")
                         console.print("[bold magenta]Аватар переключен в 3D режим (QtQuick3D модель).[/bold magenta]")
+                    elif sub in ("rust", "python"):
+                        from capri.core.config import save_config
+                        config.ui.avatar_backend = sub
+                        config.ui.avatar_enabled = True
+                        save_config(config)
+                        spawn_avatar(config.ui.avatar_mode, backend=sub)
+                        console.print(f"[cyan]Бэкенд аватара переключен на {sub.upper()} и сохранён в config.yaml.[/cyan]")
                     else:
                         if avatar_proc and avatar_proc.poll() is None:
                             config.ui.avatar_enabled = False
@@ -635,7 +645,7 @@ async def main():
                             console.print("[yellow]Плавающий аватар выключен.[/yellow]")
                         else:
                             config.ui.avatar_enabled = True
-                            spawn_avatar(config.ui.avatar_mode)
+                            spawn_avatar(config.ui.avatar_mode, backend=getattr(config.ui, "avatar_backend", "python"))
                             console.print(f"[green]Плавающий аватар ({config.ui.avatar_mode.upper()}) запущен на рабочем столе.[/green]")
                     console.print(prompt_str, end="")
                     sys.stdout.flush()
@@ -1035,7 +1045,17 @@ def cli_main(argv=None):
                 sub = args[idx + 1].strip().lower()
                 break
         if sub in ("install", "enable", "apply"):
+            cfg = load_config()
+            svc_mode = str(getattr(cfg.ui, "avatar_mode", "2d") or "2d")
+            svc_backend = str(getattr(cfg.ui, "avatar_backend", "python") or "python")
+            for idx, tok in enumerate(args):
+                if tok == "--backend" and idx + 1 < len(args):
+                    svc_backend = args[idx + 1].strip().lower()
+                elif tok.startswith("--backend="):
+                    svc_backend = tok.split("=", 1)[1].strip().lower()
             res = install_avatar_service(
+                mode=svc_mode,
+                backend=svc_backend,
                 enable="--no-enable" not in args,
                 start="--start" in args or "--now" in args,
                 dry_run="--dry-run" in args,

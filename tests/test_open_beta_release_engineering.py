@@ -266,9 +266,21 @@ def test_open_beta_governance_and_github_files_present():
     assert "Security Advisories" in security_md
     from capri import __version__ as capri_ver
     ver_parts = capri_ver.split(".")
+    expected_minor = f"v{ver_parts[0]}.{ver_parts[1]}"
     expected_branch = f"{ver_parts[0]}.{ver_parts[1]}.x"
     assert expected_branch in security_md, f"SECURITY.md Supported Versions must track {expected_branch}"
+
     readme_en = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
+    readme_ru = (ROOT_DIR / "README.ru.md").read_text(encoding="utf-8")
+    for fname, content in (("README.md", readme_en), ("README.ru.md", readme_ru)):
+        h1 = content.splitlines()[0]
+        assert expected_minor in h1, f"{fname} H1 heading must reference {expected_minor}, got: {h1!r}"
+        assert f"version-v{capri_ver}-" in content, f"{fname} version badge must match v{capri_ver}"
+        assert f"/releases/tag/v{capri_ver})" in content, f"{fname} release link must match v{capri_ver}"
+
+    pkgbuild_txt = (ROOT_DIR / "packaging" / "arch" / "PKGBUILD").read_text(encoding="utf-8")
+    assert f"pkgver={capri_ver}" in pkgbuild_txt, f"PKGBUILD pkgver must match {capri_ver}"
+
     assert "README.ru.md" in readme_en
     assert "not affiliated with" in readme_en.lower()
     assert "CD PROJEKT RED" in readme_en

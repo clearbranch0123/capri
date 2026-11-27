@@ -84,14 +84,19 @@ def resolve_avatar_exec_command(
 def generate_avatar_service_unit(
     *,
     mode: str = "2d",
+    backend: str = "python",
     exec_cmd: Optional[list[str]] = None,
     working_dir: Optional[Path] = None,
     python_bin: Optional[Path] = None,
 ) -> str:
     """Render a clean `systemd --user` unit for `capri-avatar` with compositor-restart auto-reconnect."""
     norm_mode = "3d" if str(mode or "2d").strip().lower() == "3d" else "2d"
+    norm_backend = "rust" if str(backend or "python").strip().lower() == "rust" else "python"
     cmd_parts = list(exec_cmd) if exec_cmd else resolve_avatar_exec_command(python_bin=python_bin)
-    cmd_parts.extend(["--mode", norm_mode, "--systemd"])
+    cmd_parts.extend(["--mode", norm_mode])
+    if norm_backend == "rust":
+        cmd_parts.extend(["--backend", "rust"])
+    cmd_parts.append("--systemd")
     exec_line = " ".join(systemd_escape_arg(p) for p in cmd_parts)
 
     wd = working_dir if working_dir is not None else ROOT_DIR
@@ -219,6 +224,7 @@ def get_avatar_service_status(
 def install_avatar_service(
     *,
     mode: str = "2d",
+    backend: str = "python",
     enable: bool = True,
     start: bool = False,
     dry_run: bool = False,
@@ -229,7 +235,12 @@ def install_avatar_service(
     """Install (or dry-run preview) `capri-avatar.service` under systemd user directory."""
     target_dir = get_systemd_user_dir(unit_dir)
     unit_path = target_dir / SERVICE_NAME
-    content = generate_avatar_service_unit(mode=mode, exec_cmd=exec_cmd, working_dir=working_dir)
+    content = generate_avatar_service_unit(
+        mode=mode,
+        backend=backend,
+        exec_cmd=exec_cmd,
+        working_dir=working_dir,
+    )
 
     if dry_run:
         return ServiceActionResult(

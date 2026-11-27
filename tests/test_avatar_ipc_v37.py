@@ -356,3 +356,100 @@ def test_avatar_singleton_flock_prevents_concurrent_launch_and_handles_pid_write
     lk_after = avatar_ipc.AvatarSingletonLock(run_dir / "capri" / "avatar.lock")
     assert lk_after.acquire() is True
     lk_after.release()
+
+
+def test_optional_rust_avatar_backend_ipc_roundtrip(monkeypatch, tmp_path):
+    """If the experimental `capri-avatar-rs` binary is built, verify live Python->Rust IPC parity."""
+    import subprocess
+
+    rust_bin = ui_overlay._resolve_rust_avatar_binary()
+    if rust_bin is None:
+        pytest.skip("capri-avatar-rs binary not built in this environment")
+
+    run_dir = tmp_path / "run_rs"
+    run_dir.mkdir(mode=0o700)
+    sock_path = run_dir / "capri" / "avatar.sock"
+    pid_path = run_dir / "capri" / "avatar.pid"
+
+    env = dict(os.environ)
+    env["XDG_RUNTIME_DIR"] = str(run_dir)
+    env.pop("CAPRI_AVATAR_SOCKET", None)
+    env.pop("CAPRI_AVATAR_PID", None)
+
+    proc = subprocess.Popen(
+        [str(rust_bin), "--headless", "--bench-first-frame"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not sock_path.exists():
+            assert proc.poll() is None, f"capri-avatar-rs exited early: {proc.stderr.read()}"
+            time.sleep(0.02)
+
+        assert sock_path.exists(), "capri-avatar-rs did not create avatar.sock"
+        assert pid_path.exists(), "capri-avatar-rs did not create avatar.pid"
+        assert stat.S_IMODE(os.lstat(sock_path).st_mode) == 0o600
+        assert stat.S_IMODE(os.lstat(pid_path).st_mode) == 0o600
+        assert avatar_ipc.read_owned_pid_file(pid_path) == proc.pid
+
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(run_dir))
+        monkeypatch.delenv("CAPRI_AVATAR_SOCKET", raising=False)
+        monkeypatch.setattr(ui_client, "SOCKET_PATH", ui_client._DEFAULT_SOCKET_SENTINEL)
+
+        assert ui_client.notify_avatar("speaking", "Привет от Python!", {"mood": "playful", "mouth_envelope": [0, 3, 2]}) is True
+        assert ui_client.notify_avatar_audio_level(0.65, source="tts") is True
+        assert ui_client.send_avatar_control({"type": "focus_timer", "action": "start", "minutes": 25}) is True
+        assert ui_client.send_avatar_control({"type": "control", "command": "quit"}) is True
+
+        rc = proc.wait(timeout=5.0)
+        assert rc == 0
+        assert not sock_path.exists(), "capri-avatar-rs must unlink avatar.sock on clean quit"
+        assert not pid_path.exists(), "capri-avatar-rs must unlink avatar.pid on clean quit"
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def test_avatar_backend_config_fallback_and_systemd_unit(monkeypatch, tmp_path, capsys):
+    import sys
+    from capri.core.config import UIConfig
+    from capri.core.systemd_service import generate_avatar_service_unit
+
+    assert UIConfig().avatar_backend == "python"
+    assert UIConfig(avatar_backend="rust").avatar_backend == "rust"
+
+    monkeypatch.delenv("CAPRI_AVATAR_BACKEND", raising=False)
+    assert ui_overlay._resolve_requested_avatar_backend("rust") == "rust"
+    assert ui_overlay._resolve_requested_avatar_backend("python") == "python"
+    monkeypatch.setenv("CAPRI_AVATAR_BACKEND", "rust")
+    assert ui_overlay._resolve_requested_avatar_backend(None) == "rust"
+    monkeypatch.delenv("CAPRI_AVATAR_BACKEND", raising=False)
+
+    # When `--backend rust` is requested without a built binary, launch_avatar falls back to Python
+    # (reaches PID write check instead of crashing early with exit code 2).
+    run_dir = tmp_path / "run_fallback"
+    run_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run_dir))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(ui_overlay, "SOCKET_PATH", ui_overlay._DEFAULT_SOCKET_SENTINEL)
+    monkeypatch.setattr(ui_overlay, "PID_PATH", ui_overlay._DEFAULT_PID_SENTINEL)
+    monkeypatch.setattr(ui_overlay, "_resolve_rust_avatar_binary", lambda: None)
+    monkeypatch.setattr(ui_overlay, "write_owned_pid_file", lambda p, pid: False)
+    monkeypatch.setattr(sys, "argv", ["capri-avatar", "--mode", "2d", "--backend", "rust"])
+
+    with pytest.raises(SystemExit) as exc:
+        ui_overlay.launch_avatar()
+    assert exc.value.code == 1
+    assert "falling back to python" in capsys.readouterr().err
+
+    unit_py = generate_avatar_service_unit(mode="2d", backend="python", exec_cmd=["/usr/bin/capri-avatar"])
+    assert "--backend" not in unit_py
+    unit_rs = generate_avatar_service_unit(mode="2d", backend="rust", exec_cmd=["/usr/bin/capri-avatar"])
+    assert "--mode 2d --backend rust --systemd" in unit_rs
