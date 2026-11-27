@@ -4895,6 +4895,8 @@ class CapriCyberdeckWindow(QWidget):
                 self._trigger_look_region()
             elif cmd == "ask":
                 self._toggle_quick_ask()
+            elif cmd == "relic":
+                self._open_relic_dashboard()
             elif cmd == "focus_gate":
                 sec = 0.0
                 if raw.startswith("{"):
@@ -5203,7 +5205,9 @@ def launch_cyberdeck(argv: Optional[list[str]] = None):
         if send_cyberdeck_ipc("show"):
             return 0
 
+    os.environ.pop("QT_STYLE_OVERRIDE", None)
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     apply_dark_palette(app)
     app.setQuitOnLastWindowClosed(False)
     window = CapriCyberdeckWindow()

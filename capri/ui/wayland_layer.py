@@ -962,10 +962,10 @@ class WaylandLayerStage(QObject):
         self._pending_frame = None
         self._pending_clear = False
 
-        # Clamp target rect safely inside buffer bounds
-        draw_x = max(0, min(self.width - w, int(round(x))))
-        draw_y = max(0, min(self.height - h, int(round(y))))
-        curr_rect = QRect(draw_x, draw_y, w, h)
+        # Clip target rect safely inside buffer bounds (supports negative offsets for tight sprite edges)
+        draw_x = int(round(x))
+        draw_y = int(round(y))
+        curr_rect = QRect(draw_x, draw_y, w, h).intersected(QRect(0, 0, buf.width, buf.height))
         dirty = QRect(curr_rect)
         if buf.prev_rect is not None:
             dirty = dirty.united(buf.prev_rect)

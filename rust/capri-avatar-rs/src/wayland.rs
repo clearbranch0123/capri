@@ -7,9 +7,11 @@
 //! - Cross-monitor adjacency lookup and Y-coordinate mapping
 //! - Optional secondary overlay compositing (compact native RMB menu)
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::Instant;
 
 use smithay_client_toolkit::{
@@ -96,6 +98,10 @@ struct AppWaylandState {
     configured: bool,
     closed: bool,
     shift_held: bool,
+    press_shift_held: bool,
+    shift_keys_down: Vec<u32>,
+    pointer_pressed: bool,
+    kb_interactivity: KeyboardInteractivity,
     pointer_x: f64,
     pointer_y: f64,
     pointer_seen: bool,
@@ -171,12 +177,29 @@ impl AppWaylandState {
             target,
         );
         layer_surface.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer_surface.set_exclusive_zone(-1);
+        // `exclusive_zone(0)`: do NOT reserve our own zone, DO respect top/bottom bars (e.g. end-4 quickshell bar).
+        layer_surface.set_exclusive_zone(0);
         layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer_surface.set_size(0, 0);
         layer_surface.commit();
+        self.kb_interactivity = KeyboardInteractivity::None;
         self.layer_surface = Some(layer_surface);
         self.closed = false;
+    }
+
+    fn is_shift_held(&self) -> bool {
+        self.shift_held || !self.shift_keys_down.is_empty()
+    }
+
+    fn set_keyboard_interactivity(&mut self, mode: KeyboardInteractivity) {
+        if self.kb_interactivity == mode {
+            return;
+        }
+        if let Some(ref ls) = self.layer_surface {
+            ls.set_keyboard_interactivity(mode);
+            ls.wl_surface().commit();
+            self.kb_interactivity = mode;
+        }
     }
 }
 
@@ -370,6 +393,16 @@ impl PointerHandler for AppWaylandState {
             self.pointer_y = ev.position.1;
             self.pointer_seen = true;
             match ev.kind {
+                PointerEventKind::Enter { .. } => {
+                    // Request ON_DEMAND keyboard interactivity while hovering Capri so LMB press
+                    // receives Shift modifiers/keys from Hyprland/Niri without stealing focus on hover.
+                    self.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+                }
+                PointerEventKind::Leave { .. } => {
+                    if !self.pointer_pressed {
+                        self.set_keyboard_interactivity(KeyboardInteractivity::None);
+                    }
+                }
                 PointerEventKind::Motion { .. } => {
                     self.events.push(StageEvent::PointerMove {
                         x: self.pointer_x,
@@ -380,6 +413,11 @@ impl PointerHandler for AppWaylandState {
                 PointerEventKind::Press { button, .. }
                     if button == BTN_LEFT || button == BTN_RIGHT =>
                 {
+                    if button == BTN_LEFT {
+                        self.pointer_pressed = true;
+                        self.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+                        self.press_shift_held = self.is_shift_held();
+                    }
                     self.events.push(StageEvent::PointerPress {
                         x: self.pointer_x,
                         y: self.pointer_y,
@@ -389,10 +427,14 @@ impl PointerHandler for AppWaylandState {
                 PointerEventKind::Release { button, .. }
                     if button == BTN_LEFT || button == BTN_RIGHT =>
                 {
-                    self.events.push(StageEvent::PointerRelease {
-                        button,
-                        shift: self.shift_held,
-                    });
+                    let shift = self.is_shift_held() || self.press_shift_held;
+                    if button == BTN_LEFT {
+                        self.pointer_pressed = false;
+                        self.press_shift_held = false;
+                        // Relinquish keyboard interactivity immediately so focus returns to user apps.
+                        self.set_keyboard_interactivity(KeyboardInteractivity::None);
+                    }
+                    self.events.push(StageEvent::PointerRelease { button, shift });
                 }
                 _ => {}
             }
@@ -408,9 +450,18 @@ impl KeyboardHandler for AppWaylandState {
         _: &wl_keyboard::WlKeyboard,
         _: &wl_surface::WlSurface,
         _: u32,
-        _: &[u32],
-        _: &[Keysym],
+        raw: &[u32],
+        keysyms: &[Keysym],
     ) {
+        self.shift_keys_down.clear();
+        for (&code, &sym) in raw.iter().zip(keysyms.iter()) {
+            if sym == Keysym::Shift_L || sym == Keysym::Shift_R {
+                self.shift_keys_down.push(code);
+            }
+        }
+        if self.pointer_pressed && !self.shift_keys_down.is_empty() {
+            self.press_shift_held = true;
+        }
     }
 
     fn leave(
@@ -422,6 +473,7 @@ impl KeyboardHandler for AppWaylandState {
         _: u32,
     ) {
         self.shift_held = false;
+        self.shift_keys_down.clear();
     }
 
     fn press_key(
@@ -430,8 +482,16 @@ impl KeyboardHandler for AppWaylandState {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        if event.keysym == Keysym::Shift_L || event.keysym == Keysym::Shift_R {
+            if !self.shift_keys_down.contains(&event.raw_code) {
+                self.shift_keys_down.push(event.raw_code);
+            }
+            if self.pointer_pressed {
+                self.press_shift_held = true;
+            }
+        }
     }
 
     fn release_key(
@@ -440,8 +500,11 @@ impl KeyboardHandler for AppWaylandState {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        if event.keysym == Keysym::Shift_L || event.keysym == Keysym::Shift_R {
+            self.shift_keys_down.retain(|&c| c != event.raw_code);
+        }
     }
 
     fn update_modifiers(
@@ -454,6 +517,9 @@ impl KeyboardHandler for AppWaylandState {
         _: u32,
     ) {
         self.shift_held = modifiers.shift;
+        if self.pointer_pressed && modifiers.shift {
+            self.press_shift_held = true;
+        }
     }
 }
 
@@ -518,6 +584,10 @@ impl WaylandStage {
             configured: false,
             closed: false,
             shift_held: false,
+            press_shift_held: false,
+            shift_keys_down: Vec::new(),
+            pointer_pressed: false,
+            kb_interactivity: KeyboardInteractivity::None,
             pointer_x: 0.0,
             pointer_y: 0.0,
             pointer_seen: false,
@@ -638,15 +708,21 @@ impl WaylandStage {
     }
 
     /// Update click-through `wl_region` input mask: either full stage (while dragging or menu open)
-    /// or strictly Capri's `300x420` sprite rect (normal hover/idle).
+    /// or tightly wrapped around Capri's visible sprite body (so empty margins & speech headroom stay click-through).
     pub fn update_input_region(&mut self, full_stage: bool, avatar_x: i32, avatar_y: i32) {
         let Some(ref ls) = self.state.layer_surface else {
             return;
         };
+        let sw = self.state.width as i32;
+        let sh = self.state.height as i32;
         let rect = if full_stage {
-            (0, 0, self.state.width as i32, self.state.height as i32)
+            (0, 0, sw, sh)
         } else {
-            (avatar_x, avatar_y, CANVAS_W as i32, CANVAS_H as i32)
+            let x0 = (avatar_x + 56).clamp(0, (sw - 1).max(0));
+            let y0 = (avatar_y + 72).clamp(0, (sh - 1).max(0));
+            let x1 = (avatar_x + CANVAS_W as i32 - 56).clamp(x0 + 1, sw.max(1));
+            let y1 = (avatar_y + CANVAS_H as i32 - 8).clamp(y0 + 1, sh.max(1));
+            (x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
         };
         if self.state.last_input_full == full_stage && self.state.last_input_rect == Some(rect) {
             return;
@@ -656,6 +732,79 @@ impl WaylandStage {
             ls.wl_surface().set_input_region(Some(region.wl_region()));
             self.state.last_input_full = full_stage;
             self.state.last_input_rect = Some(rect);
+        }
+    }
+
+    /// Hide the avatar completely on non-home workspaces: empty `0x0` click-through input region
+    /// and a clean transparent buffer commit so 100% of clicks pass through with 0 ghost pixels.
+    pub fn clear_frame(&mut self) {
+        if !self.is_configured() {
+            return;
+        }
+        if let Some(ref ls) = self.state.layer_surface {
+            if let Ok(empty_region) = Region::new(&self.state.compositor_state) {
+                ls.wl_surface().set_input_region(Some(empty_region.wl_region()));
+                self.state.last_input_full = false;
+                self.state.last_input_rect = Some((0, 0, 0, 0));
+            }
+        }
+        let w = self.state.width;
+        let h = self.state.height;
+        let Some(ref mut pool) = self.state.pool else {
+            if let Some(ref ls) = self.state.layer_surface {
+                ls.wl_surface().commit();
+                let _ = self.conn.flush();
+            }
+            return;
+        };
+        let mut chosen_idx = None;
+        for (idx, pbuf) in self.state.buffers.iter().enumerate() {
+            if pool.canvas(&pbuf.buffer).is_some() {
+                chosen_idx = Some(idx);
+                break;
+            }
+        }
+        let Some(idx) = chosen_idx else {
+            if let Some(ref ls) = self.state.layer_surface {
+                ls.wl_surface().commit();
+                let _ = self.conn.flush();
+            }
+            return;
+        };
+        let pbuf = &mut self.state.buffers[idx];
+        let Some(slice) = pool.canvas(&pbuf.buffer) else {
+            return;
+        };
+        let prev = pbuf.prev_rect;
+        if let Some((px, py, pw, ph)) = prev {
+            let bw = w as i32;
+            let bh = h as i32;
+            let stride = (w as usize) * 4;
+            let x0 = px.clamp(0, bw) as usize;
+            let x1 = (px + pw).clamp(0, bw) as usize;
+            let y0 = py.clamp(0, bh) as usize;
+            let y1 = (py + ph).clamp(0, bh) as usize;
+            if x1 > x0 {
+                for y in y0..y1 {
+                    let row = y * stride;
+                    slice[row + x0 * 4..row + x1 * 4].fill(0);
+                }
+            }
+        }
+        pbuf.prev_rect = None;
+        let damage = match (prev, self.state.last_committed_rect) {
+            (Some(a), Some(b)) => union_rect(a, b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => (0, 0, 1, 1),
+        };
+        self.state.last_committed_rect = None;
+        if let Some(ref ls) = self.state.layer_surface {
+            let surf = ls.wl_surface();
+            if pbuf.buffer.attach_to(surf).is_ok() {
+                surf.damage_buffer(damage.0, damage.1, damage.2.max(1), damage.3.max(1));
+                surf.commit();
+                let _ = self.conn.flush();
+            }
         }
     }
 
@@ -889,6 +1038,95 @@ pub fn send_cyberdeck_command(cmd: &str) -> bool {
 pub const POINTER_BTN_LEFT: u32 = BTN_LEFT;
 pub const POINTER_BTN_RIGHT: u32 = BTN_RIGHT;
 
+/// Non-blocking Hyprland `.socket2.sock` watcher integrated into the single `poll()` loop
+/// (zero extra threads, instant workspace STAY/FOLLOW switching).
+pub struct HyprlandWorkspaceWatcher {
+    stream: UnixStream,
+    buf: Vec<u8>,
+}
+
+impl HyprlandWorkspaceWatcher {
+    pub fn connect() -> Option<Self> {
+        let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
+        let sig = sig.trim();
+        if sig.is_empty() {
+            return None;
+        }
+        let mut candidates = Vec::new();
+        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+            let trimmed = xdg.trim();
+            if !trimmed.is_empty() {
+                candidates.push(PathBuf::from(trimmed).join("hypr").join(sig).join(".socket2.sock"));
+            }
+        }
+        candidates.push(PathBuf::from("/tmp/hypr").join(sig).join(".socket2.sock"));
+        for path in candidates {
+            if let Ok(stream) = UnixStream::connect(&path) {
+                if stream.set_nonblocking(true).is_ok() {
+                    return Some(Self {
+                        stream,
+                        buf: Vec::with_capacity(512),
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    pub fn raw_fd(&self) -> RawFd {
+        self.stream.as_raw_fd()
+    }
+
+    /// Read pending socket2 events and return the latest active workspace ID if changed.
+    /// Returns `Err(())` if the socket disconnected.
+    pub fn poll_workspace_change(&mut self) -> Result<Option<i64>, ()> {
+        let mut tmp = [0u8; 2048];
+        loop {
+            match self.stream.read(&mut tmp) {
+                Ok(0) => return Err(()),
+                Ok(n) => self.buf.extend_from_slice(&tmp[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => return Err(()),
+            }
+        }
+        let mut latest_ws: Option<i64> = None;
+        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+            let line = String::from_utf8_lossy(&self.buf[..pos]).to_string();
+            self.buf.drain(..=pos);
+            if let Some(ws_id) = parse_hyprland_workspace_event(&line) {
+                latest_ws = Some(ws_id);
+            }
+        }
+        if self.buf.len() > 8192 {
+            self.buf.clear();
+        }
+        Ok(latest_ws)
+    }
+}
+
+pub fn parse_hyprland_workspace_event(line: &str) -> Option<i64> {
+    let (ev, data) = line.split_once(">>")?;
+    match ev.trim() {
+        "workspacev2" => data.split(',').next()?.trim().parse::<i64>().ok(),
+        "focusedmonv2" => data.split(',').nth(1)?.trim().parse::<i64>().ok(),
+        "workspace" => data.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+pub fn query_active_hyprland_workspace_id() -> Option<i64> {
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+    let out = Command::new("hyprctl")
+        .args(["-j", "activeworkspace"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    val.get("id").and_then(serde_json::Value::as_i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,5 +1158,13 @@ mod tests {
 
         let mapped = map_y_between_outputs(330.0, 420.0, 1080.0, 1440.0);
         assert!((mapped - 510.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn parses_hyprland_socket2_workspace_events() {
+        assert_eq!(parse_hyprland_workspace_event("workspacev2>>4,4"), Some(4));
+        assert_eq!(parse_hyprland_workspace_event("focusedmonv2>>DP-1,2"), Some(2));
+        assert_eq!(parse_hyprland_workspace_event("workspace>>3"), Some(3));
+        assert_eq!(parse_hyprland_workspace_event("activewindow>>kitty,agy"), None);
     }
 }

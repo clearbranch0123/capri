@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -298,11 +298,13 @@ class CapriAvatarQuickPopover(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(
             parent,
-            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint,
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.setObjectName("capri-avatar-popover")
+        self.setWindowTitle("Capri Quick Control")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedWidth(268)
+        self._drag_offset: Optional[QPoint] = None
         apply_dark_palette(self)
         self.setStyleSheet(_popover_qss())
 
@@ -590,13 +592,52 @@ class CapriAvatarQuickPopover(QWidget):
         self.btn_pin.style().polish(self.btn_pin)
 
     def show_near(self, pos: QPoint) -> None:
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QApplication
+
         self.adjustSize()
-        tx = max(12, pos.x() - self.width() // 2)
-        ty = max(12, pos.y() - self.height() // 2)
+        w = max(self.width(), self.sizeHint().width())
+        h = max(self.height(), self.sizeHint().height())
+        tx = pos.x() - w // 2
+        ty = pos.y() - h // 2
+        try:
+            screen = QApplication.screenAt(pos) or QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+            if screen is not None:
+                geo = screen.availableGeometry()
+                tx = max(geo.left() + 12, min(geo.right() - w - 12, tx))
+                ty = max(geo.top() + 12, min(geo.bottom() - h - 12, ty))
+            else:
+                tx = max(12, tx)
+                ty = max(12, ty)
+        except Exception:
+            tx = max(12, tx)
+            ty = max(12, ty)
         self.move(tx, ty)
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            wh = self.windowHandle()
+            if wh is not None and wh.startSystemMove():
+                event.accept()
+                return
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -604,8 +645,3 @@ class CapriAvatarQuickPopover(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
-
-    def changeEvent(self, event):
-        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
-            self.hide()
-        super().changeEvent(event)

@@ -159,6 +159,61 @@ impl AvatarVisualState {
         self.caption_ticks = ticks;
     }
 
+    pub fn focus_remaining_mm_ss(&self) -> String {
+        if !self.focus_active {
+            return "OFF".to_string();
+        }
+        let elapsed = self
+            .focus_started_at
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
+        let rem = (self.focus_duration_secs - elapsed).max(0.0).ceil() as u64;
+        format!("{:02}:{:02}", rem / 60, rem % 60)
+    }
+
+    /// Cycle Pomodoro presets identically to Python (`OFF -> 25m -> 50m -> 15m -> OFF`).
+    pub fn cycle_focus_timer(&mut self) -> Option<u32> {
+        let next_mins = if !self.focus_active {
+            Some(25)
+        } else {
+            let cur_mins = (self.focus_duration_secs / 60.0).round() as u32;
+            match cur_mins {
+                25 => Some(50),
+                50 => Some(15),
+                _ => None,
+            }
+        };
+        if let Some(m) = next_mins {
+            self.focus_active = true;
+            self.focus_progress = 0.0;
+            self.focus_duration_secs = (m as f64) * 60.0;
+            self.focus_started_at = Some(Instant::now());
+        } else {
+            self.focus_active = false;
+            self.focus_progress = 0.0;
+            self.focus_started_at = None;
+        }
+        next_mins
+    }
+
+    /// Cycle Game Mode override identically to Python (`AUTO -> FORCE ON -> OFF -> AUTO`).
+    pub fn cycle_game_mode(&mut self, sprites: &mut SpriteStore, physics: &mut AvatarPhysics2D) {
+        match self.game_mode_override {
+            None => {
+                self.game_mode_override = Some(true);
+                self.set_power_saver(true, sprites, physics);
+            }
+            Some(true) => {
+                self.game_mode_override = Some(false);
+                self.set_power_saver(false, sprites, physics);
+            }
+            Some(false) => {
+                self.game_mode_override = None;
+                self.set_power_saver(false, sprites, physics);
+            }
+        }
+    }
+
     /// Adaptive timer interval matching Python v3.7.0 (`16ms` active / `64ms` calm idle / `120ms` sleep / `250ms` reduced motion / `None` in game mode).
     pub fn target_frame_interval_ms(&self, physics: &AvatarPhysics2D) -> Option<u64> {
         if self.power_saver_active {
@@ -621,7 +676,7 @@ impl AvatarRenderer {
             };
             vis.hover_phase.sin() * amp
         };
-        let base_char_y = (ch - target_h - 6.0).max(72.0);
+        let base_char_y = (ch - target_h - 14.0).max(72.0);
         let char_y = (base_char_y
             + hover_y
             + if vis.reduced_motion {
@@ -995,12 +1050,22 @@ impl AvatarRenderer {
                     blend_mode: BlendMode::SourceOver,
                     quality: FilterQuality::Nearest,
                 };
+                let bubble_dy = if phys.y < 0.0 {
+                    (-phys.y as f32 + 4.0).min(96.0)
+                } else {
+                    0.0
+                };
+                let bubble_dx = if phys.x < 0.0 {
+                    (-phys.x as f32).min(48.0)
+                } else {
+                    0.0
+                };
                 self.canvas.draw_pixmap(
                     0,
                     0,
                     bpm.as_ref(),
                     &bubble_paint,
-                    Transform::identity(),
+                    Transform::from_translate(bubble_dx, bubble_dy),
                     None,
                 );
             }

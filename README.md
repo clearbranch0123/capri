@@ -2,7 +2,7 @@
 
 🇬🇧 **English** · 🇷🇺 **[Русский](README.ru.md)**
 
-[![Version](https://img.shields.io/badge/version-v3.8.0-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.0)
+[![Version](https://img.shields.io/badge/version-v3.8.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.1)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/Tests-312%2F312%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)

@@ -447,6 +447,18 @@ class CapriQuickAskBar(QWidget):
                 self._compositor = False
         return self._compositor if self._compositor else None
 
+    def _sync_native_compositor_pin(self) -> bool:
+        """Sync Hyprland native `pin` state to `self._pinned` (overrides static `pin = true` WM rules)."""
+        if not self.isVisible() or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return False
+        comp = self._get_compositor()
+        if comp is None or getattr(comp, "kind", "unknown") != "hyprland":
+            return False
+        try:
+            return bool(comp.set_window_pinned_sync(self.windowTitle(), self._pinned))
+        except Exception:
+            return False
+
     def _update_workspace_follow_timer(self) -> None:
         if (
             self._pinned
@@ -454,7 +466,9 @@ class CapriQuickAskBar(QWidget):
             and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
         ):
             comp = self._get_compositor()
-            if comp is not None and getattr(comp, "kind", "unknown") in ("niri", "hyprland"):
+            kind = getattr(comp, "kind", "unknown") if comp is not None else "unknown"
+            # Hyprland handles pinning natively via `dispatch pin`; only Niri needs timer-based workspace follow
+            if kind == "niri":
                 if not self._workspace_follow_timer.isActive():
                     self._workspace_follow_timer.start()
                 return
@@ -465,8 +479,12 @@ class CapriQuickAskBar(QWidget):
         self._pinned = bool(enabled)
         self._apply_pin_button_style()
         self._update_workspace_follow_timer()
-        if self._pinned and self.isVisible():
-            self._on_workspace_follow_tick()
+        if self.isVisible():
+            self._sync_native_compositor_pin()
+            if self._pinned:
+                comp = self._get_compositor()
+                if comp is not None and getattr(comp, "kind", "unknown") == "niri":
+                    self._on_workspace_follow_tick()
 
     def toggle_pinned(self) -> None:
         self.set_pinned(not self._pinned)
@@ -559,6 +577,7 @@ class CapriQuickAskBar(QWidget):
         self.input_edit.setFocus()
         self.input_edit.selectAll()
         self._update_workspace_follow_timer()
+        QTimer.singleShot(80, self._sync_native_compositor_pin)
 
     def dismiss(self) -> None:
         self._workspace_follow_timer.stop()
@@ -879,9 +898,13 @@ class CapriQuickAskBar(QWidget):
         self.hide()
         self.open_cyberdeck_requested.emit()
 
-    # Allow subtle dragging by card margin / non-input header area
+    # Allow subtle dragging by card margin / non-input header area (Wayland-native startSystemMove)
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            wh = self.windowHandle()
+            if wh is not None and wh.startSystemMove():
+                event.accept()
+                return
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
             return

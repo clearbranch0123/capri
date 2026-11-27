@@ -97,6 +97,8 @@ pub struct PhysicsConfig {
     pub max_tilt_deg: f64,
     pub squash_stiffness: f64,
     pub squash_damping: f64,
+    pub edge_pad_x: f64,
+    pub edge_pad_top: f64,
 }
 
 impl Default for PhysicsConfig {
@@ -121,6 +123,10 @@ impl Default for PhysicsConfig {
             max_tilt_deg: 8.0,
             squash_stiffness: 120.0,
             squash_damping: 16.0,
+            // Compensate for transparent sprite margins inside the 300x420 canvas
+            // (72px L/R, 85px top headroom) so visible edges reach within ~10px of screen borders.
+            edge_pad_x: 62.0,
+            edge_pad_top: 74.0,
         }
     }
 }
@@ -217,9 +223,9 @@ impl AvatarPhysics2D {
     }
 
     pub fn clamp_bounds(&self, monitor: MonitorWorkArea) -> (f64, f64, f64, f64) {
-        let min_x = monitor.left;
-        let max_x = (monitor.right() - self.avatar_w).max(min_x);
-        let min_y = monitor.top;
+        let min_x = monitor.left - self.cfg.edge_pad_x;
+        let max_x = (monitor.right() - self.avatar_w + self.cfg.edge_pad_x).max(min_x);
+        let min_y = monitor.top - self.cfg.edge_pad_top;
         let max_y = (monitor.bottom() - self.avatar_h).max(min_y);
         (min_x, max_x, min_y, max_y)
     }
@@ -824,9 +830,147 @@ impl AvatarPhysics2D {
     }
 }
 
-/// Best-effort query for visible Hyprland/Niri floating window tops to perch on.
+/// Parse Hyprland `monitors` + `clients` JSON into workarea-local landing shelves
+/// strictly filtered to the active monitor and active workspace (zero phantom cross-workspace barriers).
+pub fn parse_hyprland_window_shelves(
+    monitors_json: &serde_json::Value,
+    clients_json: &serde_json::Value,
+    monitor: MonitorWorkArea,
+    active_output_name: &str,
+) -> Vec<LandingSurface> {
+    let mut shelves = Vec::new();
+    let Some(mons) = monitors_json.as_array() else {
+        return shelves;
+    };
+    let active_mon = mons
+        .iter()
+        .find(|m| {
+            !active_output_name.is_empty()
+                && m.get("name").and_then(serde_json::Value::as_str) == Some(active_output_name)
+        })
+        .or_else(|| {
+            mons.iter()
+                .find(|m| m.get("focused").and_then(serde_json::Value::as_bool) == Some(true))
+        })
+        .or_else(|| mons.first());
+
+    let Some(mon_obj) = active_mon else {
+        return shelves;
+    };
+    let mon_id = mon_obj.get("id").and_then(serde_json::Value::as_i64);
+    let active_ws_id = mon_obj
+        .get("activeWorkspace")
+        .and_then(|w| w.get("id"))
+        .and_then(serde_json::Value::as_i64);
+    let mon_x = mon_obj
+        .get("x")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let mon_y = mon_obj
+        .get("y")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let reserved = mon_obj
+        .get("reserved")
+        .and_then(serde_json::Value::as_array);
+    let res_left = reserved
+        .and_then(|r| r.first())
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let res_top = reserved
+        .and_then(|r| r.get(1))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+
+    let origin_x = mon_x + res_left;
+    let origin_y = mon_y + res_top;
+    let min_valid_y = monitor.top + 110.0;
+    let max_valid_y = monitor.bottom() - 48.0;
+
+    let Some(clients) = clients_json.as_array() else {
+        return shelves;
+    };
+    for win in clients {
+        let mapped = win
+            .get("mapped")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let hidden = win
+            .get("hidden")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !mapped || hidden {
+            continue;
+        }
+        let fs = win
+            .get("fullscreen")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        let fs_client = win
+            .get("fullscreenClient")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if fs != 0 || fs_client != 0 {
+            continue;
+        }
+        let cls = win
+            .get("class")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if cls == "capri-avatar" {
+            continue;
+        }
+        if let Some(expected_mon) = mon_id {
+            if win.get("monitor").and_then(serde_json::Value::as_i64) != Some(expected_mon) {
+                continue;
+            }
+        }
+        if let Some(expected_ws) = active_ws_id {
+            let win_ws = win
+                .get("workspace")
+                .and_then(|w| w.get("id"))
+                .and_then(serde_json::Value::as_i64);
+            if win_ws != Some(expected_ws) {
+                continue;
+            }
+        }
+        let Some(at) = win.get("at").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let Some(sz) = win.get("size").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        if at.len() < 2 || sz.len() < 2 {
+            continue;
+        }
+        let x = at[0].as_f64().unwrap_or(0.0) - origin_x;
+        let y = at[1].as_f64().unwrap_or(0.0) - origin_y;
+        let w = sz[0].as_f64().unwrap_or(0.0);
+        let x_min = x.max(monitor.left);
+        let x_max = (x + w).min(monitor.right());
+        if (x_max - x_min) >= 180.0 && y >= min_valid_y && y <= max_valid_y {
+            let is_floating = win
+                .get("floating")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            shelves.push(LandingSurface {
+                kind: SurfaceKind::WindowTop,
+                x_min,
+                x_max,
+                y,
+                priority: if is_floating { 15 } else { 10 },
+            });
+        }
+    }
+    shelves
+}
+
+/// Best-effort query for visible Hyprland/Niri window tops on the active workspace & monitor.
 /// Called only on drag-release so idle CPU remains unaffected.
-pub fn query_window_shelves(monitor: MonitorWorkArea) -> Vec<LandingSurface> {
+pub fn query_window_shelves(
+    monitor: MonitorWorkArea,
+    active_output_name: &str,
+) -> Vec<LandingSurface> {
     let mut shelves = Vec::new();
     if std::env::var_os("NIRI_SOCKET").is_some() {
         if let Ok(out) = Command::new("niri").args(["msg", "-j", "windows"]).output() {
@@ -862,7 +1006,10 @@ pub fn query_window_shelves(monitor: MonitorWorkArea) -> Vec<LandingSurface> {
                             let x = pos[0].as_f64().unwrap_or(0.0);
                             let y = pos[1].as_f64().unwrap_or(0.0);
                             let w = size[0].as_f64().unwrap_or(0.0);
-                            if w >= 180.0 && y > monitor.top + 80.0 && y < monitor.bottom() - 80.0 {
+                            if w >= 180.0
+                                && y >= monitor.top + 110.0
+                                && y <= monitor.bottom() - 48.0
+                            {
                                 shelves.push(LandingSurface {
                                     kind: SurfaceKind::WindowTop,
                                     x_min: x,
@@ -877,41 +1024,20 @@ pub fn query_window_shelves(monitor: MonitorWorkArea) -> Vec<LandingSurface> {
             }
         }
     } else if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        if let Ok(out) = Command::new("hyprctl").args(["-j", "clients"]).output() {
-            if out.status.success() {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    if let Some(arr) = val.as_array() {
-                        for win in arr {
-                            let mapped = win
-                                .get("mapped")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false);
-                            if !mapped {
-                                continue;
-                            }
-                            let Some(at) = win.get("at").and_then(serde_json::Value::as_array) else {
-                                continue;
-                            };
-                            let Some(sz) = win.get("size").and_then(serde_json::Value::as_array) else {
-                                continue;
-                            };
-                            if at.len() < 2 || sz.len() < 2 {
-                                continue;
-                            }
-                            let x = at[0].as_f64().unwrap_or(0.0);
-                            let y = at[1].as_f64().unwrap_or(0.0);
-                            let w = sz[0].as_f64().unwrap_or(0.0);
-                            if w >= 180.0 && y > monitor.top + 80.0 && y < monitor.bottom() - 80.0 {
-                                shelves.push(LandingSurface {
-                                    kind: SurfaceKind::WindowTop,
-                                    x_min: x,
-                                    x_max: x + w,
-                                    y,
-                                    priority: 10,
-                                });
-                            }
-                        }
-                    }
+        let mons_out = Command::new("hyprctl").args(["-j", "monitors"]).output();
+        let clients_out = Command::new("hyprctl").args(["-j", "clients"]).output();
+        if let (Ok(mo), Ok(co)) = (mons_out, clients_out) {
+            if mo.status.success() && co.status.success() {
+                if let (Ok(mval), Ok(cval)) = (
+                    serde_json::from_slice::<serde_json::Value>(&mo.stdout),
+                    serde_json::from_slice::<serde_json::Value>(&co.stdout),
+                ) {
+                    return parse_hyprland_window_shelves(
+                        &mval,
+                        &cval,
+                        monitor,
+                        active_output_name,
+                    );
                 }
             }
         }
@@ -962,13 +1088,24 @@ mod tests {
     #[test]
     fn fast_horizontal_throw_crosses_into_adjacent_monitor() {
         let mon = MonitorWorkArea::from_size(1920, 1080);
-        let mut phys = AvatarPhysics2D::new(300.0, 420.0, 1600.0, 200.0);
+        let mut phys = AvatarPhysics2D::new(300.0, 420.0, 1660.0, 200.0);
         phys.state = PhysicsState::Falling;
         phys.vx = 900.0;
         phys.vy = 0.0;
         let ev = phys.step(0.05, mon, &[], false, true);
         assert_eq!(ev.crossed_monitor_side, 1);
         assert_eq!(phys.state, PhysicsState::Falling);
+    }
+
+    #[test]
+    fn clamp_bounds_uses_visible_sprite_margins() {
+        let mon = MonitorWorkArea::from_size(1920, 1035);
+        let phys = AvatarPhysics2D::new(300.0, 420.0, 0.0, 0.0);
+        let (min_x, max_x, min_y, max_y) = phys.clamp_bounds(mon);
+        assert!((min_x - (-62.0)).abs() < 1e-3);
+        assert!((max_x - 1682.0).abs() < 1e-3);
+        assert!((min_y - (-74.0)).abs() < 1e-3);
+        assert!((max_y - 615.0).abs() < 1e-3);
     }
 
     #[test]
@@ -982,5 +1119,64 @@ mod tests {
         assert_eq!(phys.state, PhysicsState::Idle);
         assert_eq!(phys.vx, 0.0);
         assert_eq!(phys.vy, 0.0);
+    }
+
+    #[test]
+    fn hyprland_shelves_filter_inactive_workspaces_and_apply_reserved_offset() {
+        let monitors = serde_json::json!([
+            {
+                "id": 1,
+                "name": "DP-1",
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "reserved": [0, 45, 0, 0],
+                "focused": true,
+                "activeWorkspace": { "id": 4 }
+            }
+        ]);
+        let clients = serde_json::json!([
+            {
+                "class": "firefox",
+                "at": [200, 300],
+                "size": [900, 600],
+                "monitor": 1,
+                "workspace": { "id": 1 },
+                "mapped": true,
+                "hidden": false,
+                "floating": true,
+                "fullscreen": 0
+            },
+            {
+                "class": "kitty",
+                "at": [6, 51],
+                "size": [1908, 1023],
+                "monitor": 1,
+                "workspace": { "id": 4 },
+                "mapped": true,
+                "hidden": false,
+                "floating": false,
+                "fullscreen": 0
+            },
+            {
+                "class": "capri-cyberdeck",
+                "at": [300, 345],
+                "size": [800, 500],
+                "monitor": 1,
+                "workspace": { "id": 4 },
+                "mapped": true,
+                "hidden": false,
+                "floating": true,
+                "fullscreen": 0
+            }
+        ]);
+        let workarea = MonitorWorkArea::from_size(1920, 1035);
+        let shelves = parse_hyprland_window_shelves(&monitors, &clients, workarea, "DP-1");
+        // Firefox (ws 1) and top-tiled kitty (local y = 6 < 110) must be excluded; only floating ws 4 remains.
+        assert_eq!(shelves.len(), 1);
+        assert!((shelves[0].y - 300.0).abs() < 1e-3);
+        assert!((shelves[0].x_min - 300.0).abs() < 1e-3);
+        assert!((shelves[0].x_max - 1100.0).abs() < 1e-3);
     }
 }

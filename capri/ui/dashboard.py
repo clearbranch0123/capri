@@ -441,6 +441,10 @@ class CapriRelicDashboard(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            wh = self.windowHandle()
+            if wh is not None and wh.startSystemMove():
+                event.accept()
+                return
             self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 

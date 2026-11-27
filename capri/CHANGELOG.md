@@ -5,6 +5,24 @@
 
 ---
 
+## [3.8.1] — 2026-11-27 (Hyprland Native Polish, Rust/Python HUD Parity & Quick Ask Pinning)
+
+Патч-релиз, доводящий адаптацию под **Hyprland** (включая конфигурации 0.56+/0.57+ на Lua и панели вроде `end-4` / `quickshell`) и выравнивающий нативный Rust HUD с Python-поповером по дизайну и возможностям.
+
+### 🪟 Hyprland и Wayland (Rust + Python)
+- **Корректная рабочая область и полки окон:** `capri-avatar-rs` теперь использует `set_exclusive_zone(0)` (учитывая верхний/нижний бар композитора), фильтрует полки `hyprctl clients` строго по активному монитору и активному воркспейсу с вычетом `reserved`-отступов и запасом `110 px`, а также увеличивает нижний отступ, чтобы пятки и аура не резались об край экрана.
+- **STAY / FOLLOW по воркспейсам в `capri-avatar-rs`:** встроен неблокирующий `HyprlandWorkspaceWatcher` через `.socket2.sock` в едином `poll`-цикле с автоматическим переподключением раз в 2 с при обрыве.
+- **`Shift + ЛКМ` / `Shift + перетаскивание` и видимые границы:** переключение `KeyboardInteractivity::OnDemand` только во время наведения/захвата ЛКМ (с мгновенным возвратом фокуса в `None`), поддержка `Shift + клик` в обоих бэкендах и компенсация прозрачных полей спрайта (`edge_pad_x=62 / edge_pad_top=74`), чтобы Капри подходила почти вплотную (~10 px) к краям экрана.
+- **Исправление Python HUD (`CapriAvatarQuickPopover`) и перетаскивания на Wayland:** в режиме `zwlr_layer_shell_v1` интерактивные Qt-окна используют `capri-dashboard` (не попадая под правила `pin`/`nofocus` для `capri-avatar`), не закрываются от `follow_mouse = 1`, скрываются при смене воркспейса, зажимаются внутри экрана без обрезки снизу и поддерживают нативное Wayland-перетаскивание (`startSystemMove()`) вместе с `Relic Construct` и `Quick Ask`.
+- **Нативное закрепление `Quick Ask` на Hyprland:** кнопка закрепления синхронизирует нативный `pin` композитора (`set_window_pinned_sync`) как в классическом Hyprland, так и в Hyprland 0.56+/0.57+ Lua (`hl.dsp.window.pin`).
+- **Чистый стиль Qt и `/doctor`:** сброс `QT_STYLE_OVERRIDE` + принудительный `Fusion` в Cyberdeck/Overlay и поддержка `*.lua` конфигов Hyprland в `check_wm_rules_installed`.
+
+### 🎨 Полный паритет Rust HUD с Python HUD (`rust/capri-avatar-rs/src/menu.rs`)
+- Нативная карточка **Crimson Graphite** прямо на слое `zwlr_layer_shell_v1` с перетаскиванием за шапку, секцией поз (`Сидеть / Танец / Сон`), всеми 6 тумблерами поведения (`Физика`, `Свободная жизнь`, `Следовать за окном`, `Авто-позы`, `Фокус-таймер Pomodoro`, `Game Mode`), кнопками **`◈ Релик`** (через новый IPC `"relic"` в Cyberdeck), **`Быстрый вопрос`**, **`Голос`**, **`Область`**, **`На базу`**, **`Закрепить тут`** и **`Выключить аватар`** с векторными иконками `tiny-skia`.
+- **Верификация релиза v3.8.1:** **312/312 Python tests + 19/19 Rust tests + zero-Qt E2E IPC passed, 0 warnings**.
+
+---
+
 ## [3.8.0] — 2026-11-27 (Opt-in Native Rust 2D Avatar Backend & Multi-Monitor)
 
 Минорный релиз, добавляющий опциональный нативный Rust-демон 2D-аватара (`capri-avatar-rs`) для Wayland (`zwlr_layer_shell_v1`) с безопасным авто-фолбэком на Python и независимой CI-проверкой.

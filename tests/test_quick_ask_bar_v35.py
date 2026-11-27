@@ -308,6 +308,59 @@ def test_quick_ask_sticky_pin_workspace_follow_and_voice_status_reset(monkeypatc
     comp = CompositorBackend(forced_kind="niri")
     found, moved = comp.follow_window_to_active_workspace_sync("Capri Quick Ask", focus=False)
     assert found is True and moved is True
+
+    # 1b. Hyprland native `set_window_pinned_sync` toggles `dispatch pin` only when state differs
+    hypr_cmds: list[str] = []
+    hypr_pinned_state = {"pinned": True}
+
+    def _fake_hypr_cmd(cmd, timeout=0.25):
+        hypr_cmds.append(cmd)
+        if cmd == "j/clients":
+            return (
+                '[{"address":"0xabc123","title":"Capri Quick Ask","workspace":{"id":4},'
+                f'"floating":true,"focusHistoryID":0,"pinned":{str(hypr_pinned_state["pinned"]).lower()}}}]'
+            )
+        if cmd == "dispatch pin address:0xabc123":
+            hypr_pinned_state["pinned"] = not hypr_pinned_state["pinned"]
+            return "ok"
+        return "ok"
+
+    monkeypatch.setattr("capri.core.compositor._hyprland_socket_command", _fake_hypr_cmd)
+    hcomp = CompositorBackend(forced_kind="hyprland")
+    # Already pinned -> requesting True is a no-op (no double-toggle!)
+    assert hcomp.set_window_pinned_sync("Capri Quick Ask", True) is True
+    assert "dispatch pin address:0xabc123" not in hypr_cmds
+    # Requesting False -> unpins natively even if static WM rule had `pin = true`
+    assert hcomp.set_window_pinned_sync("Capri Quick Ask", False) is True
+    assert hypr_pinned_state["pinned"] is False
+    assert hypr_cmds.count("dispatch pin address:0xabc123") == 1
+    # Requesting True again -> re-pins natively
+    assert hcomp.set_window_pinned_sync("Capri Quick Ask", True) is True
+    assert hypr_pinned_state["pinned"] is True
+    assert hypr_cmds.count("dispatch pin address:0xabc123") == 2
+
+    # 1c. Hyprland 0.56+ Lua config mode falls back cleanly to `hl.dsp.window.pin({ window = "address:..." })`
+    lua_cmds: list[str] = []
+    lua_pinned_state = {"pinned": True}
+
+    def _fake_hypr_lua_cmd(cmd, timeout=0.25):
+        lua_cmds.append(cmd)
+        if cmd == "j/clients":
+            return (
+                '[{"address":"0xdef456","title":"Capri Quick Ask","workspace":{"id":4},'
+                f'"floating":true,"focusHistoryID":0,"pinned":{str(lua_pinned_state["pinned"]).lower()}}}]'
+            )
+        if cmd == "dispatch pin address:0xdef456":
+            return 'error: 3 [string "return hl.dispatch(pin address:0xdef456)"]:1: \')\' expected'
+        if cmd == 'dispatch hl.dsp.window.pin({ window = "address:0xdef456" })':
+            lua_pinned_state["pinned"] = not lua_pinned_state["pinned"]
+            return "ok"
+        return "error"
+
+    monkeypatch.setattr("capri.core.compositor._hyprland_socket_command", _fake_hypr_lua_cmd)
+    assert hcomp.set_window_pinned_sync("Capri Quick Ask", False) is True
+    assert lua_pinned_state["pinned"] is False
+    assert 'dispatch hl.dsp.window.pin({ window = "address:0xdef456" })' in lua_cmds
     assert any(
         isinstance(c, dict)
         and c.get("Action", {}).get("MoveWindowToWorkspace") == {"window_id": 77, "reference": {"Id": 22}, "focus": False}

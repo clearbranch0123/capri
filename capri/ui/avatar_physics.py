@@ -151,8 +151,15 @@ class AvatarPhysics2D:
         self._used_external_drag: bool = False
         self.active_surface: Optional[LandingSurface] = None
         self.perched: bool = False
+        self.edge_pad_x: float = 0.0
+        self.edge_pad_top: float = 0.0
 
     # ── Switches & Synchronization ──────────────────────────────────────────
+
+    def set_edge_margins(self, pad_x: float = 0.0, pad_top: float = 0.0) -> None:
+        """Allow transparent sprite margins to extend past stage edges on layer-shell overlays."""
+        self.edge_pad_x = max(0.0, float(pad_x))
+        self.edge_pad_top = max(0.0, float(pad_top))
 
     def sync_external_position(self, x: float, y: float) -> None:
         """Align simulation & IPC tracker with an externally reported compositor position."""
@@ -211,9 +218,9 @@ class AvatarPhysics2D:
     # ── Bounds Helpers (Logical Pixels + Negative Monitor Coords) ───────────
 
     def _clamp_bounds(self, monitor: MonitorWorkArea) -> tuple[float, float, float, float]:
-        min_x = monitor.work_left
-        max_x = max(min_x, monitor.work_right - self.avatar_w)
-        min_y = monitor.work_top
+        min_x = monitor.work_left - self.edge_pad_x
+        max_x = max(min_x, monitor.work_right - self.avatar_w + self.edge_pad_x)
+        min_y = monitor.work_top - self.edge_pad_top
         max_y = max(min_y, monitor.work_bottom - self.avatar_h)
         return min_x, max_x, min_y, max_y
 

@@ -490,10 +490,14 @@ class CapriAvatarWidget(QWidget):
         app_inst = QApplication.instance()
         if app_inst is not None:
             app_inst.setQuitOnLastWindowClosed(False)
+            # In layer-shell mode Capri herself uses `namespace="capri-avatar"`, while interactive
+            # Qt popovers/Relic HUD must NOT inherit `class="capri-avatar"` (`pin`/`nofocus` WM rules!).
+            QApplication.setDesktopFileName("capri-dashboard")
         # Zero MoveFloatingWindow IPC needed — all motion renders directly inside the layer stage!
         self.physics.set_ipc_available(False)
+        self.physics.set_edge_margins(62.0, 74.0)
 
-        init_x = max(0.0, float(stage.width - 330))
+        init_x = max(0.0, float(stage.width - 300 + 32))
         init_y = max(0.0, float(stage.height - 420))
         self.physics.sync_external_position(init_x, init_y)
         self.locomotion.home_coords = (init_x, init_y)
@@ -566,6 +570,8 @@ class CapriAvatarWidget(QWidget):
         if should_hide != self._layer_hidden_for_ws:
             self._layer_hidden_for_ws = should_hide
             if should_hide:
+                if hasattr(self, "quick_popover") and self.quick_popover is not None:
+                    self.quick_popover.hide()
                 self.layer_stage.clear_frame()
             else:
                 self._render_layer_frame()
@@ -682,8 +688,10 @@ class CapriAvatarWidget(QWidget):
         if self._layer_hidden_for_ws:
             return
         interactive = not self.power_saver_active
-        dx = max(0, min(self.layer_stage.width - 300, int(round(self.physics.x))))
-        dy = max(0, min(self.layer_stage.height - 420, int(round(self.physics.y))))
+        mon = self._stage_monitor()
+        min_x, max_x, min_y, max_y = self.physics._clamp_bounds(mon)
+        dx = int(round(max(min_x, min(max_x, self.physics.x))))
+        dy = int(round(max(min_y, min(max_y, self.physics.y))))
         hitbox = self._compute_avatar_hitbox(dx, dy)
         self.layer_stage.render_avatar(
             self.canvas_v2.render_to_painter,
@@ -715,6 +723,7 @@ class CapriAvatarWidget(QWidget):
         self._layer_press_pos = (px, py)
         self._layer_grab_offset = (px - self.physics.x, py - self.physics.y)
         self._layer_dragging = True
+        self._grab_was_pinned = bool(self.physics.pinned)
         self._press_shift_held = bool(shift_held)
         self._drag_last_ts = now_mono
         self._active_monitor = self._stage_monitor()
@@ -772,6 +781,12 @@ class CapriAvatarWidget(QWidget):
         if moved < 6.0 and elapsed < 0.38:
             self._layer_last_click_ts = time.time()
             self._layer_last_click_pos = (px, py)
+            if effective_shift:
+                self.physics.pinned = bool(getattr(self, "_grab_was_pinned", False))
+                self._toggle_pin_in_place()
+                self._render_layer_frame()
+                return
+            self.physics.pinned = bool(getattr(self, "_grab_was_pinned", False))
             self.physics.vx = 0.0
             self.physics.vy = 0.0
             self.physics.state = PhysicsState.PINNED if self.physics.pinned else PhysicsState.IDLE
@@ -2286,6 +2301,9 @@ class CapriAvatarWidget(QWidget):
                 self.canvas_v2.set_pose(dec.pose)
 
     def _show_context_menu(self, pos: QPoint):
+        if self.quick_popover.isVisible():
+            self.quick_popover.hide()
+            return
         self._sync_quick_popover()
         self.quick_popover.show_near(pos)
 
@@ -2509,7 +2527,9 @@ def launch_avatar():
     except Exception:
         pass
 
+    os.environ.pop("QT_STYLE_OVERRIDE", None)
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     from .theme import apply_dark_palette
     apply_dark_palette(app)
     widget = CapriAvatarWidget(mode=args.mode, parent_pid=args.parent_pid, systemd_managed=bool(args.systemd))

@@ -109,6 +109,9 @@ def generate_hyprland_rules(
         "windowrulev2 = size 300 420, class:^(capri-avatar)$",
         "windowrulev2 = move 100%-330 100%-450, class:^(capri-avatar)$",
         "windowrulev2 = opacity 0.98 0.96, class:^(capri-cyberdeck)$",
+        "windowrulev2 = float, class:^(capri-dashboard)$",
+        "windowrulev2 = noborder, class:^(capri-dashboard)$",
+        "windowrulev2 = noshadow, class:^(capri-dashboard)$",
         "windowrulev2 = float, title:^(Capri Quick Ask)$",
         "windowrulev2 = pin, title:^(Capri Quick Ask)$",
         "windowrulev2 = noborder, title:^(Capri Quick Ask)$",
@@ -239,6 +242,7 @@ def check_wm_rules_installed(wm: Optional[str] = None, config_dir: Optional[Path
             candidates.append(base / "hyprland.conf")
         if base.is_dir():
             candidates.extend(sorted(p for p in base.rglob("*.conf") if p not in candidates))
+            candidates.extend(sorted(p for p in base.rglob("*.lua") if p not in candidates))
         for fpath in candidates:
             try:
                 txt = fpath.read_text(encoding="utf-8", errors="replace")

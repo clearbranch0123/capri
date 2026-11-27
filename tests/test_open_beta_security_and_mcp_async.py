@@ -691,9 +691,20 @@ for line in sys.stdin:
         }) + "\\n")
         sys.stdout.flush()
     elif m == "tools/call":
+        compact_env = {
+            k: (
+                v
+                if (
+                    k in ("EXPLICIT_TOKEN", "STATIC_OPT", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALLOWED_MCP_TOKEN")
+                    or len(v) <= 128
+                )
+                else v[:64] + "..."
+            )
+            for k, v in sorted(os.environ.items())
+        }
         sys.stdout.write(json.dumps({
             "jsonrpc": "2.0", "id": rid,
-            "result": {"isError": False, "content": [{"type": "text", "text": json.dumps(dict(os.environ))}]}
+            "result": {"isError": False, "content": [{"type": "text", "text": json.dumps(compact_env)}]}
         }) + "\\n")
         sys.stdout.flush()
 """

@@ -128,7 +128,7 @@ def _valid_hyprland_address(win_id: Any) -> Optional[str]:
     if win_id is None or isinstance(win_id, bool):
         return None
     addr = str(win_id).strip()
-    if not addr or any(ch in addr for ch in (" ", ",", "\n", "\r", "\t", ";")):
+    if not addr or any(ch in addr for ch in (" ", ",", "\n", "\r", "\t", ";", '"', "'", "\\", "(", ")", "{", "}")):
         return None
     return addr
 
@@ -891,8 +891,43 @@ class CompositorBackend:
                                 "workspace_id": ws.get("id") if isinstance(ws, dict) else None,
                                 "is_floating": bool(c.get("floating", False)),
                                 "is_focused": bool(c.get("focusHistoryID", 1) == 0),
+                                "is_pinned": bool(c.get("pinned", False)),
                             }
         return None
+
+    def set_window_pinned_sync(self, exact_title: str, pinned: bool) -> bool:
+        """
+        Synchronize Hyprland's native compositor `pinned` state for a floating helper window
+        (e.g. 'Capri Quick Ask') so toggling Pin ON/OFF overrides any static `pin = true` WM rule.
+        Returns True if the state already matched or was successfully updated.
+        """
+        if self.kind != "hyprland":
+            return False
+        win = self.find_window_by_title_sync(exact_title)
+        if win is None or win.get("id") is None:
+            return False
+        addr = _valid_hyprland_address(win["id"])
+        if addr is None:
+            return False
+        cur_pinned = bool(win.get("is_pinned", False))
+        desired = bool(pinned)
+        if cur_pinned == desired:
+            return True
+        if desired and not win.get("is_floating", True):
+            self.set_window_floating_sync(addr)
+        resp = _hyprland_socket_command(f"dispatch pin address:{addr}")
+        if resp is not None:
+            if resp.strip().lower() == "ok":
+                return True
+            # Hyprland 0.56+/0.57+ Lua config mode uses `hl.dsp.window.pin(...)`
+            if "hl.dispatch" in resp or resp.strip().lower().startswith("error"):
+                lua_resp = _hyprland_socket_command(
+                    f'dispatch hl.dsp.window.pin({{ window = "address:{addr}" }})'
+                )
+                return lua_resp is not None and lua_resp.strip().lower() == "ok"
+            return False
+        code, _, _ = _run_sync(["hyprctl", "dispatch", "pin", f"address:{addr}"])
+        return code == 0
 
     def follow_window_to_active_workspace_sync(
         self,
