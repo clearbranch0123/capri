@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-v3.8.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.1)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-312%2F312%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-313%2F313%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
@@ -175,11 +175,11 @@ Quick Ask доступен напрямую из UI (`⚡` в шапке Cyberde
 
 ---
 
-## 🐛 Как сообщить о баге
+## 🐛 Обратная связь и баг-репорты
 
-1. Выполни в терминале `./run.sh --bugreport` (или `/bugreport` в чате Cyberdeck).
-2. Команда сохранит файл в `~/.config/capri/bugreports/capri-bugreport-*.md`. В него **автоматически не попадают** переписка (`sessions.db`), память, эмоции и `.env`, а API-ключи, токены, URL-секреты и домашние пути редактируются.
-3. Открой Issue через шаблон **Bug Report** на GitHub и приложи содержимое этого файла.
+1. Открой структурированный **[GitHub Issue](https://github.com/clearbranch0123/capri/issues/new/choose)** через шаблон **Bug Report** или **Feature Request**.
+2. Укажи **версию Capri** (`capri --version`), **дистрибутив**, **композитор и его версию** (`hyprctl version` / `niri --version`), **бэкенд аватара** (`python` / `rust`) и **шаги воспроизведения**.
+3. Для диагностики выполни `./run.sh --bugreport` (или `/bugreport` в Cyberdeck): файл `~/.config/capri/bugreports/capri-bugreport-*.md` автоматически исключает переписку (`sessions.db`), память, эмоции и `.env` и редактирует ключи/токены/URL-секреты/домашние пути — **прикладывай его только после личной проверки на отсутствие секретов**.
 4. Об уязвимостях безопасности сообщай **приватно** согласно [`SECURITY.md`](SECURITY.md).
 
 ---

@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-v3.8.1-e12d53.svg?style=for-the-badge)](https://github.com/clearbranch0123/capri/releases/tag/v3.8.1)
 [![CI](https://img.shields.io/github/actions/workflow/status/clearbranch0123/capri/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/clearbranch0123/capri/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/Tests-312%2F312%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-313%2F313%20passed-4dd4a8.svg?style=for-the-badge)](tests/)
 [![Architecture](https://img.shields.io/badge/Docs-Architecture-5294e2.svg?style=for-the-badge)](docs/ARCHITECTURE.md)
 [![Platform](https://img.shields.io/badge/Platform-Arch%20%7C%20CachyOS%20%7C%20Fedora-e45c84.svg?style=for-the-badge)](setup.sh)
 [![Window Manager](https://img.shields.io/badge/WM-Niri%20%7C%20Hyprland%20%7C%20wlroots-47d1a0.svg?style=for-the-badge)](https://github.com/YaLTeR/niri)
@@ -190,11 +190,11 @@ Destructive patterns (`rm -rf /`, `mkfs`, `dd of=/dev/...`, `curl | sh`, `shutdo
 
 ---
 
-## 🐛 Reporting Bugs
+## 🐛 Beta Feedback & Reporting Bugs
 
-1. Run `./run.sh --bugreport` (or `/bugreport` in Cyberdeck).
-2. The report is saved to `~/.config/capri/bugreports/capri-bugreport-*.md`. Chat logs (`sessions.db`), memory, emotions, and `.env` are **excluded**, and API keys, tokens, URL credentials, and home paths are redacted automatically.
-3. Open a GitHub Issue using the **Bug Report** template and paste the report.
+1. Open a structured **[GitHub Issue](https://github.com/clearbranch0123/capri/issues/new/choose)** using the **Bug Report** or **Feature Request** template.
+2. Include your **Capri version** (`capri --version`), **Linux distro**, **compositor + compositor version** (`hyprctl version` / `niri --version`), **avatar backend** (`python` / `rust`), and clear **steps to reproduce**.
+3. For diagnostics, run `./run.sh --bugreport` (or `/bugreport` in Cyberdeck): the bundle saved to `~/.config/capri/bugreports/capri-bugreport-*.md` automatically excludes `sessions.db`, memory, emotions, and `.env` and redacts keys/tokens/URL credentials/home paths — **always review it for any remaining secrets before pasting**.
 4. Report security issues **privately** as described in [`SECURITY.md`](SECURITY.md).
 
 ---

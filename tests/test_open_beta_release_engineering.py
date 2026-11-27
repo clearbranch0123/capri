@@ -246,6 +246,7 @@ def test_open_beta_governance_and_github_files_present():
         ROOT_DIR / ".github" / "workflows" / "ci.yml",
         ROOT_DIR / ".github" / "dependabot.yml",
         ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml",
+        ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "config.yml",
     )
     for f in required_files:
         assert f.exists(), f"Missing required Open Beta file: {f}"
@@ -280,6 +281,11 @@ def test_open_beta_governance_and_github_files_present():
 
     pkgbuild_txt = (ROOT_DIR / "packaging" / "arch" / "PKGBUILD").read_text(encoding="utf-8")
     assert f"pkgver={capri_ver}" in pkgbuild_txt, f"PKGBUILD pkgver must match {capri_ver}"
+
+    bug_tpl = (ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8")
+    assert f'placeholder: "{capri_ver}"' in bug_tpl, f"bug_report.yml version placeholder must match {capri_ver}"
+    assert "id: compositor_version" in bug_tpl
+    assert "id: secret_check" in bug_tpl
 
     assert "README.ru.md" in readme_en
     assert "not affiliated with" in readme_en.lower()
