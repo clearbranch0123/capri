@@ -39,10 +39,13 @@ def test_quick_ask_bar_submit_attachments_streaming_and_cleanup(monkeypatch, tmp
     bar.open_cyberdeck_requested.connect(lambda: opened_deck.append(True))
 
     try:
-        # 1. Empty submit does nothing; compact bar stays locked to minimal floating height (no tiling stretch!)
+        # 1. Empty submit does nothing; compact bar stays bounded by strict min/max resize locks
         assert bool(bar.windowFlags() & Qt.WindowType.Tool) is True
-        assert bar.minimumWidth() == bar.maximumWidth() == 640
-        assert bar.minimumHeight() == bar.maximumHeight()
+        assert bar.minimumWidth() == CapriQuickAskBar.MIN_BAR_WIDTH
+        assert bar.maximumWidth() == CapriQuickAskBar.MAX_BAR_WIDTH
+        assert bar.width() == CapriQuickAskBar.DEFAULT_BAR_WIDTH
+        assert bar.minimumHeight() == CapriQuickAskBar.MIN_COMPACT_HEIGHT
+        assert bar.maximumHeight() == CapriQuickAskBar.MAX_COMPACT_HEIGHT
         compact_h = bar.height()
         assert 76 <= compact_h <= 100
         bar._on_submit_clicked()
@@ -391,5 +394,69 @@ def test_quick_ask_sticky_pin_workspace_follow_and_voice_status_reset(monkeypatc
         assert bar.lbl_status.text() == "СЛУШАЮ…"
         bar.set_voice_recording(False)
         assert bar.lbl_status.text() == "ГОТОВО"
+    finally:
+        bar.close()
+
+
+def test_quick_ask_bar_edge_corner_resizing_and_strict_min_max_locks(monkeypatch):
+    from PySide6.QtCore import QPoint, QRect
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QApplication.instance() or QApplication([])
+
+    bar = CapriQuickAskBar(None)
+    try:
+        # Edge & corner hit-testing + Windows-style cursor mapping
+        assert bar._resize_edges_at(QPoint(4, bar.height() // 2)) == Qt.Edge.LeftEdge
+        assert bar._resize_edges_at(QPoint(bar.width() - 4, bar.height() // 2)) == Qt.Edge.RightEdge
+        assert bar._resize_edges_at(QPoint(bar.width() // 2, 4)) == Qt.Edge.TopEdge
+        assert bar._resize_edges_at(QPoint(bar.width() // 2, bar.height() - 4)) == Qt.Edge.BottomEdge
+        assert bar._resize_edges_at(QPoint(6, 6)) == (Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
+        assert bar._resize_edges_at(QPoint(bar.width() - 6, bar.height() - 6)) == (Qt.Edge.RightEdge | Qt.Edge.BottomEdge)
+        assert bar._resize_edges_at(QPoint(bar.width() // 2, bar.height() // 2)) == Qt.Edge(0)
+
+        assert bar._cursor_for_edges(Qt.Edge.RightEdge) == Qt.CursorShape.SizeHorCursor
+        assert bar._cursor_for_edges(Qt.Edge.BottomEdge) == Qt.CursorShape.SizeVerCursor
+        assert bar._cursor_for_edges(Qt.Edge.RightEdge | Qt.Edge.BottomEdge) == Qt.CursorShape.SizeFDiagCursor
+        assert bar._cursor_for_edges(Qt.Edge.LeftEdge | Qt.Edge.BottomEdge) == Qt.CursorShape.SizeBDiagCursor
+
+        # Manual fallback resize clamps strictly to [MIN_BAR_WIDTH..MAX_BAR_WIDTH] & [MIN_COMPACT..MAX_COMPACT]
+        bar.setGeometry(QRect(200, 200, 640, 82))
+        bar._resize_edges = Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+        bar._resize_start_global = QPoint(840, 282)
+        bar._resize_start_geom = bar.geometry()
+
+        # Stretch way past max -> clamped to MAX_BAR_WIDTH x MAX_COMPACT_HEIGHT
+        bar._apply_manual_resize(QPoint(2500, 1500))
+        assert bar.width() == CapriQuickAskBar.MAX_BAR_WIDTH
+        assert bar.height() == CapriQuickAskBar.MAX_COMPACT_HEIGHT
+
+        # Shrink way below min -> clamped to MIN_BAR_WIDTH x MIN_COMPACT_HEIGHT
+        bar._apply_manual_resize(QPoint(100, 100))
+        assert bar.width() == CapriQuickAskBar.MIN_BAR_WIDTH
+        assert bar.height() == CapriQuickAskBar.MIN_COMPACT_HEIGHT
+
+        # Custom width persists across response expand & collapse, while expanded height respects expanded bounds
+        bar._apply_manual_resize(QPoint(1040, 282))  # 640 + 200 = 840
+        assert bar.width() == 840
+        bar._resize_edges = Qt.Edge(0)
+
+        bar.set_final_text("Тест масштабирования панели ответа.")
+        assert bar.width() == 840
+        assert bar.minimumHeight() == CapriQuickAskBar.MIN_EXPANDED_HEIGHT
+        assert bar.maximumHeight() == CapriQuickAskBar.MAX_EXPANDED_HEIGHT
+
+        bar._resize_edges = Qt.Edge.BottomEdge
+        bar._resize_start_global = QPoint(500, bar.geometry().bottom())
+        bar._resize_start_geom = bar.geometry()
+        bar._apply_manual_resize(QPoint(500, bar.geometry().bottom() + 900))
+        assert bar.height() == CapriQuickAskBar.MAX_EXPANDED_HEIGHT
+        bar._apply_manual_resize(QPoint(500, bar.geometry().bottom() - 900))
+        assert bar.height() == CapriQuickAskBar.MIN_EXPANDED_HEIGHT
+
+        # Double-click reset restores default 640px width & auto height
+        bar.reset_size()
+        assert bar.width() == CapriQuickAskBar.DEFAULT_BAR_WIDTH
+        assert bar._custom_expanded_height is None
     finally:
         bar.close()

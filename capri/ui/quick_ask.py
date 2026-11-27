@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from PySide6.QtCore import QBuffer, QIODevice, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QKeyEvent, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -64,6 +64,16 @@ class _QuickAskLineEdit(QLineEdit):
 class CapriQuickAskBar(QWidget):
     """Floating Crimson Graphite Spotlight-style quick prompt & live answer overlay."""
 
+    DEFAULT_BAR_WIDTH = 640
+    MIN_BAR_WIDTH = 440
+    MAX_BAR_WIDTH = 1120
+    MIN_COMPACT_HEIGHT = 78
+    MAX_COMPACT_HEIGHT = 124
+    MIN_EXPANDED_HEIGHT = 210
+    MAX_EXPANDED_HEIGHT = 680
+    RESIZE_MARGIN = 14
+    CORNER_MARGIN = 20
+
     submit_requested = Signal(str, list)   # (prompt_text, list[AttachmentItem])
     stop_requested = Signal()
     voice_toggle_requested = Signal()
@@ -75,15 +85,19 @@ class CapriQuickAskBar(QWidget):
         super().__init__(parent)
         self.setObjectName("capri-quick-ask")
         self.setWindowTitle("Capri Quick Ask")
-        # `Tool` + locked `setFixedSize(w, h)` ensures tiling Wayland compositors (Niri / Hyprland / Sway)
-        # automatically float this compact palette without stretching it to a full-height tiled column.
+        # `Tool` + bounded min/max size ensures tiling Wayland compositors (Niri / Hyprland / Sway)
+        # keep this compact palette floating while allowing Windows-style edge/corner resizing.
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._bar_width: int = 640
+        self.setMouseTracking(True)
+        self._bar_width: int = self.DEFAULT_BAR_WIDTH
+        self._custom_compact_height: Optional[int] = None
+        self._custom_expanded_height: Optional[int] = None
+        self._syncing_size: bool = False
 
         self._attachments: list[AttachmentItem] = []
         self._generating: bool = False
@@ -92,6 +106,9 @@ class CapriQuickAskBar(QWidget):
         self._raw_response_text: str = ""
         self._tools_seen: list[str] = []
         self._drag_offset: Optional[QPoint] = None
+        self._resize_edges: Qt.Edge = Qt.Edge(0)
+        self._resize_start_global: Optional[QPoint] = None
+        self._resize_start_geom: Optional[QRect] = None
         self._compositor = None
 
         self._copy_reset_timer = QTimer(self)
@@ -111,11 +128,12 @@ class CapriQuickAskBar(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(0)
-        outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.card = QFrame(self)
         self.card.setObjectName("quickAskCard")
-        self.card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.card.setMouseTracking(True)
+        self.card.installEventFilter(self)
+        self.card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.card.setStyleSheet(f"""
             QFrame#quickAskCard {{
                 background: {COLORS.nav};
@@ -281,7 +299,7 @@ class CapriQuickAskBar(QWidget):
         self.txt_response.setReadOnly(True)
         self.txt_response.setFrameShape(QFrame.Shape.NoFrame)
         self.txt_response.setMinimumHeight(64)
-        self.txt_response.setMaximumHeight(250)
+        self.txt_response.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.txt_response.setStyleSheet(f"""
             QTextEdit {{
                 background: transparent;
@@ -293,7 +311,7 @@ class CapriQuickAskBar(QWidget):
             }}
             {scrollbar_qss(5)}
         """)
-        resp_lay.addWidget(self.txt_response)
+        resp_lay.addWidget(self.txt_response, stretch=1)
 
         footer_row = QHBoxLayout()
         footer_row.setContentsMargins(0, 2, 0, 0)
@@ -353,7 +371,7 @@ class CapriQuickAskBar(QWidget):
 
         resp_lay.addLayout(footer_row)
         self.response_panel.hide()
-        card_lay.addWidget(self.response_panel)
+        card_lay.addWidget(self.response_panel, stretch=1)
 
         outer.addWidget(self.card)
 
@@ -528,30 +546,76 @@ class CapriQuickAskBar(QWidget):
 
     # ── Positioning, Compact Fixed-Height Sync & Show/Dismiss ──────────────
 
-    def _sync_compact_size(self) -> None:
-        """Lock exact (width, height) so Wayland tiling WMs always keep Quick Ask floating & minimal."""
+    def _size_bounds(self) -> tuple[int, int, int, int]:
+        """Return `(min_w, max_w, min_h, max_h)` locks for the current compact/expanded state."""
         has_attach = bool(self._attachments)
         has_resp = not self.response_panel.isHidden()
-
-        # Fit QTextEdit height smoothly to document content without sprawling across the screen
+        attach_extra = 34 if has_attach else 0
         if has_resp:
-            try:
-                self.txt_response.document().setTextWidth(self._bar_width - 76)
-                doc_h = int(self.txt_response.document().size().height()) + 14
-            except Exception:
-                doc_h = 84
-            resp_h = max(64, min(230, doc_h))
-            self.txt_response.setFixedHeight(resp_h)
+            min_h = self.MIN_EXPANDED_HEIGHT + attach_extra
+            max_h = self.MAX_EXPANDED_HEIGHT
+        else:
+            min_h = self.MIN_COMPACT_HEIGHT + attach_extra
+            max_h = self.MAX_COMPACT_HEIGHT + attach_extra
+        return self.MIN_BAR_WIDTH, self.MAX_BAR_WIDTH, min_h, max_h
 
-        # Base compact height: top bar (62) + outer margins (20) = 82px
-        target_h = 82
-        if has_attach:
-            target_h += 34
+    def reset_size(self) -> None:
+        """Reset Quick Ask dimensions back to default compact width & auto height."""
+        self._bar_width = self.DEFAULT_BAR_WIDTH
+        self._custom_compact_height = None
+        self._custom_expanded_height = None
+        self._sync_compact_size()
+
+    def _unlock_resize_bounds(self) -> None:
+        """Restore bounded min/max resize locks after a Wayland snap-to-size configure."""
+        min_w, max_w, min_h, max_h = self._size_bounds()
+        self._syncing_size = True
+        try:
+            self.setMinimumSize(min_w, min_h)
+            self.setMaximumSize(max_w, max_h)
+        finally:
+            self._syncing_size = False
+
+    def _sync_compact_size(self) -> None:
+        """Apply strict min/max size locks and smoothly fit compact or expanded Quick Ask geometry."""
+        has_attach = bool(self._attachments)
+        has_resp = not self.response_panel.isHidden()
+        min_w, max_w, min_h, max_h = self._size_bounds()
+
+        self._bar_width = max(min_w, min(max_w, int(self._bar_width)))
+
         if has_resp:
-            target_h += self.txt_response.height() + 74
+            if self._custom_expanded_height is not None:
+                target_h = max(min_h, min(max_h, int(self._custom_expanded_height)))
+            else:
+                try:
+                    self.txt_response.document().setTextWidth(max(220, self._bar_width - 76))
+                    doc_h = int(self.txt_response.document().size().height()) + 16
+                except Exception:
+                    doc_h = 84
+                resp_h = max(64, min(230, doc_h))
+                target_h = 82 + (34 if has_attach else 0) + resp_h + 74
+                target_h = max(min_h, min(430, target_h))
+        else:
+            base_h = 82 + (34 if has_attach else 0)
+            if self._custom_compact_height is not None:
+                target_h = max(min_h, min(max_h, int(self._custom_compact_height)))
+            else:
+                target_h = max(min_h, min(max_h, base_h))
 
-        target_h = max(78, min(430, target_h))
-        self.setFixedSize(self._bar_width, target_h)
+        self._syncing_size = True
+        try:
+            if self.isVisible() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                # On Wayland (Hyprland / Niri), briefly lock min==max so the compositor applies the
+                # exact programmatic expand/collapse/reset size, then re-open bounded resize limits.
+                self.setFixedSize(self._bar_width, target_h)
+                QTimer.singleShot(50, self._unlock_resize_bounds)
+            else:
+                self.setMinimumSize(min_w, min_h)
+                self.setMaximumSize(max_w, max_h)
+                self.resize(self._bar_width, target_h)
+        finally:
+            self._syncing_size = False
 
     def position_on_active_screen(self) -> None:
         screen = None
@@ -898,10 +962,144 @@ class CapriQuickAskBar(QWidget):
         self.hide()
         self.open_cyberdeck_requested.emit()
 
-    # Allow subtle dragging by card margin / non-input header area (Wayland-native startSystemMove)
+    # ── Edge/Corner Resizing (Windows-style) & Wayland-Native Moving ───────
+
+    def _resize_edges_at(self, pos: QPoint) -> Qt.Edge:
+        """Detect which window edges/corners `pos` (widget-local) hits for interactive resize."""
+        w = self.width()
+        h = self.height()
+        x = pos.x()
+        y = pos.y()
+        m = self.RESIZE_MARGIN
+        cm = self.CORNER_MARGIN
+
+        near_left = x <= m
+        near_right = x >= (w - m)
+        near_top = y <= m
+        near_bottom = y >= (h - m)
+
+        # Slightly wider grab zone at the 4 corners so diagonal resize feels effortless
+        if x <= cm and y <= cm:
+            return Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+        if x >= (w - cm) and y <= cm:
+            return Qt.Edge.RightEdge | Qt.Edge.TopEdge
+        if x <= cm and y >= (h - cm):
+            return Qt.Edge.LeftEdge | Qt.Edge.BottomEdge
+        if x >= (w - cm) and y >= (h - cm):
+            return Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+
+        edges = Qt.Edge(0)
+        if near_left:
+            edges |= Qt.Edge.LeftEdge
+        elif near_right:
+            edges |= Qt.Edge.RightEdge
+        if near_top:
+            edges |= Qt.Edge.TopEdge
+        elif near_bottom:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for_edges(edges: Qt.Edge) -> Qt.CursorShape:
+        has_l = bool(edges & Qt.Edge.LeftEdge)
+        has_r = bool(edges & Qt.Edge.RightEdge)
+        has_t = bool(edges & Qt.Edge.TopEdge)
+        has_b = bool(edges & Qt.Edge.BottomEdge)
+        if (has_l and has_t) or (has_r and has_b):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (has_r and has_t) or (has_l and has_b):
+            return Qt.CursorShape.SizeBDiagCursor
+        if has_l or has_r:
+            return Qt.CursorShape.SizeHorCursor
+        if has_t or has_b:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _update_hover_cursor(self, pos: QPoint) -> None:
+        edges = self._resize_edges_at(pos)
+        shape = self._cursor_for_edges(edges)
+        if shape == Qt.CursorShape.ArrowCursor:
+            self.unsetCursor()
+        else:
+            self.setCursor(QCursor(shape))
+
+    def _apply_manual_resize(self, global_pos: QPoint) -> None:
+        if not self._resize_edges or self._resize_start_global is None or self._resize_start_geom is None:
+            return
+        min_w, max_w, min_h, max_h = self._size_bounds()
+        delta = global_pos - self._resize_start_global
+        g = QRect(self._resize_start_geom)
+
+        left = g.left()
+        right = g.right()
+        top = g.top()
+        bottom = g.bottom()
+
+        if self._resize_edges & Qt.Edge.RightEdge:
+            new_w = max(min_w, min(max_w, g.width() + delta.x()))
+            right = left + new_w - 1
+        elif self._resize_edges & Qt.Edge.LeftEdge:
+            new_w = max(min_w, min(max_w, g.width() - delta.x()))
+            left = right - new_w + 1
+
+        if self._resize_edges & Qt.Edge.BottomEdge:
+            new_h = max(min_h, min(max_h, g.height() + delta.y()))
+            bottom = top + new_h - 1
+        elif self._resize_edges & Qt.Edge.TopEdge:
+            new_h = max(min_h, min(max_h, g.height() - delta.y()))
+            top = bottom - new_h + 1
+
+        new_rect = QRect(left, top, right - left + 1, bottom - top + 1)
+        self.setGeometry(new_rect)
+        self._bar_width = max(min_w, min(max_w, new_rect.width()))
+        if self.response_panel.isHidden():
+            self._custom_compact_height = max(min_h, min(max_h, new_rect.height()))
+        else:
+            self._custom_expanded_height = max(min_h, min(max_h, new_rect.height()))
+
+    def eventFilter(self, obj, event):
+        if obj is self.card:
+            et = event.type()
+            if et == QEvent.Type.MouseMove and not (event.buttons() & Qt.MouseButton.LeftButton):
+                pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                self._update_hover_cursor(pos)
+            elif et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                edges = self._resize_edges_at(pos)
+                if edges != Qt.Edge(0):
+                    wh = self.windowHandle()
+                    if wh is not None and wh.startSystemResize(edges):
+                        event.accept()
+                        return True
+                    self._resize_edges = edges
+                    self._resize_start_global = event.globalPosition().toPoint()
+                    self._resize_start_geom = self.geometry()
+                    event.accept()
+                    return True
+            elif et == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
+                pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                if self._resize_edges_at(pos) != Qt.Edge(0):
+                    self.reset_size()
+                    event.accept()
+                    return True
+            elif et == QEvent.Type.Leave:
+                self.unsetCursor()
+        return super().eventFilter(obj, event)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            edges = self._resize_edges_at(pos)
             wh = self.windowHandle()
+            if edges != Qt.Edge(0):
+                if wh is not None and wh.startSystemResize(edges):
+                    event.accept()
+                    return
+                self._resize_edges = edges
+                self._resize_start_global = event.globalPosition().toPoint()
+                self._resize_start_geom = self.geometry()
+                event.accept()
+                return
             if wh is not None and wh.startSystemMove():
                 event.accept()
                 return
@@ -910,19 +1108,50 @@ class CapriQuickAskBar(QWidget):
             return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._resize_edges_at(event.position().toPoint()) != Qt.Edge(0):
+                self.reset_size()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event):
+        if self._resize_edges != Qt.Edge(0) and (event.buttons() & Qt.MouseButton.LeftButton):
+            self._apply_manual_resize(event.globalPosition().toPoint())
+            event.accept()
+            return
         if self._drag_offset is not None and (event.buttons() & Qt.MouseButton.LeftButton):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
             return
+        self._update_hover_cursor(event.position().toPoint())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self._drag_offset = None
+        self._resize_edges = Qt.Edge(0)
+        self._resize_start_global = None
+        self._resize_start_geom = None
         super().mouseReleaseEvent(event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._syncing_size:
+            return
+        min_w, max_w, min_h, max_h = self._size_bounds()
+        self._bar_width = max(min_w, min(max_w, self.width()))
+        if self.response_panel.isHidden():
+            self._custom_compact_height = max(min_h, min(max_h, self.height()))
+        else:
+            self._custom_expanded_height = max(min_h, min(max_h, self.height()))
+            try:
+                self.txt_response.document().setTextWidth(max(220, self._bar_width - 76))
+            except Exception:
+                pass
+
     def paintEvent(self, event):
-        # Soft drop shadow strictly around the compact card geometry (never stretches vertically)
+        # Soft drop shadow around card + subtle bottom-right Crimson Graphite resize grip
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = self.card.geometry().adjusted(-3, -1, 3, 5)
@@ -931,6 +1160,15 @@ class CapriQuickAskBar(QWidget):
         p.fillPath(path, QColor(0, 0, 0, 125))
         p.setPen(QPen(QColor(225, 45, 83, 45), 1.0))
         p.drawPath(path)
+
+        # Subtle corner resize indicator ticks (bottom-right rim)
+        cg = self.card.geometry()
+        grip_pen = QPen(QColor(225, 45, 83, 95), 1.3)
+        grip_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(grip_pen)
+        bx, by = cg.right() - 6, cg.bottom() - 6
+        p.drawLine(bx - 7, by, bx, by - 7)
+        p.drawLine(bx - 3, by, bx, by - 3)
         p.end()
 
     def hideEvent(self, event):
