@@ -17,6 +17,7 @@ use tiny_skia::{
 };
 
 use crate::physics::{AvatarPhysics2D, PhysicsState};
+use crate::presence::PresenceSnapshot;
 use crate::protocol::IpcCommand;
 use crate::sprites::{SpriteStore, DEFAULT_TARGET_H, DEFAULT_TARGET_W};
 
@@ -68,6 +69,10 @@ pub struct AvatarVisualState {
     pub auto_poses_enabled: bool,
     pub reactions_enabled: bool,
     pub autonomous_life_enabled: bool,
+    pub manual_pose_override: Option<String>,
+    pub media_playing: bool,
+    pub media_track_label: String,
+    pub last_announced_track: String,
 
     pub focus_active: bool,
     pub focus_progress: f32,
@@ -112,6 +117,10 @@ impl Default for AvatarVisualState {
             auto_poses_enabled: true,
             reactions_enabled: true,
             autonomous_life_enabled: true,
+            manual_pose_override: None,
+            media_playing: false,
+            media_track_label: String::new(),
+            last_announced_track: String::new(),
             focus_active: false,
             focus_progress: 0.0,
             focus_started_at: None,
@@ -155,8 +164,114 @@ impl AvatarVisualState {
     }
 
     pub fn show_ephemeral_caption(&mut self, text: impl Into<String>, ticks: u64) {
-        self.caption_text = text.into();
-        self.caption_ticks = ticks;
+        let raw = text.into();
+        let clean = raw
+            .replace('\n', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if clean.is_empty() {
+            return;
+        }
+        let clipped = if clean.chars().count() > 86 {
+            let mut s: String = clean.chars().take(83).collect();
+            s.push('…');
+            s
+        } else {
+            clean
+        };
+        self.caption_text = clipped;
+        self.caption_ticks = ticks.max(60);
+    }
+
+    /// Apply a fresh Living Awareness snapshot (MPRIS playback + auto Game Mode) and sync pose.
+    /// Returns `true` if any visible state changed and requires an immediate redraw.
+    pub fn apply_presence_snapshot(
+        &mut self,
+        snap: PresenceSnapshot,
+        sprites: &mut SpriteStore,
+        physics: &mut AvatarPhysics2D,
+    ) -> bool {
+        let prev_power = self.power_saver_active;
+        let prev_pose = self.pose.clone();
+        let prev_caption = self.caption_text.clone();
+
+        if self.game_mode_override.is_none() {
+            let effective_gm = snap.game_mode.active && self.game_mode_enabled;
+            self.set_power_saver(effective_gm, sprites, physics);
+        }
+
+        self.media_playing = snap.media.is_playing;
+        self.media_track_label = snap.media.track_label;
+        if !self.media_playing {
+            self.last_announced_track.clear();
+        }
+
+        self.sync_auto_pose(sprites, physics);
+
+        self.power_saver_active != prev_power
+            || self.pose != prev_pose
+            || self.caption_text != prev_caption
+    }
+
+    /// Deterministic auto-pose resolver matching Python `capri/core/presence.py`.
+    pub fn sync_auto_pose(&mut self, sprites: &mut SpriteStore, physics: &AvatarPhysics2D) {
+        if self.power_saver_active {
+            self.pose = "sleep".to_string();
+            return;
+        }
+        if self.state != "idle" {
+            if self.pose == "sleep" {
+                self.wake_up(sprites);
+            }
+            if self.pose != "normal" {
+                self.pose = "normal".to_string();
+            }
+            return;
+        }
+        if self.dance_active {
+            return;
+        }
+        if let Some(manual) = self.manual_pose_override.clone() {
+            if self.pose != manual {
+                if self.pose == "sleep" && manual != "sleep" {
+                    self.wake_up(sprites);
+                }
+                self.pose = manual;
+            }
+            return;
+        }
+        if self.auto_poses_enabled && self.media_playing {
+            if self.pose == "sleep" {
+                self.wake_up(sprites);
+            }
+            if self.pose != "perch_music" {
+                self.pose = "perch_music".to_string();
+            }
+            if self.reactions_enabled
+                && !self.media_track_label.is_empty()
+                && self.media_track_label != self.last_announced_track
+            {
+                self.last_announced_track = self.media_track_label.clone();
+                let label = self.media_track_label.clone();
+                self.show_ephemeral_caption(format!("♪ {label}"), 210);
+            }
+            return;
+        }
+        if self.auto_poses_enabled
+            && self.idle_ticks >= IDLE_SLEEP_TICKS
+            && !sprites.get_slot("sleep").is_empty()
+        {
+            self.pose = "sleep".to_string();
+            return;
+        }
+        let target = if physics.perched { "perch" } else { "normal" };
+        if self.pose != target {
+            if self.pose == "sleep" {
+                self.wake_up(sprites);
+            }
+            self.pose = target.to_string();
+        }
     }
 
     pub fn focus_remaining_mm_ss(&self) -> String {
@@ -302,6 +417,7 @@ impl AvatarVisualState {
                 }
                 if let Some(ap) = auto_avatar_poses {
                     self.auto_poses_enabled = ap;
+                    self.sync_auto_pose(sprites, physics);
                 }
                 if let Some(re) = reactions_enabled {
                     self.reactions_enabled = re;
@@ -408,16 +524,19 @@ impl AvatarVisualState {
                     match p.as_str() {
                         "wake" => self.wake_up(sprites),
                         "normal" | "auto" => {
+                            self.manual_pose_override = None;
                             if self.pose == "sleep" {
                                 self.wake_up(sprites);
                             }
                             self.pose = "normal".to_string();
                             self.idle_ticks = 0;
+                            self.sync_auto_pose(sprites, physics);
                         }
                         "perch" | "perch_music" | "lounge" | "walk" | "sleep" => {
                             if self.pose == "sleep" && p != "sleep" {
                                 self.wake_up(sprites);
                             }
+                            self.manual_pose_override = Some(p.clone());
                             self.pose = p;
                             self.idle_ticks = 0;
                         }
@@ -428,6 +547,8 @@ impl AvatarVisualState {
                     self.state = st;
                     if self.state != "idle" {
                         self.wake_up(sprites);
+                    } else {
+                        self.sync_auto_pose(sprites, physics);
                     }
                 }
                 if let Some(txt) = text {
@@ -456,6 +577,7 @@ impl AvatarVisualState {
             self.pose = "sleep".to_string();
         } else {
             self.wake_up(sprites);
+            self.sync_auto_pose(sprites, physics);
         }
     }
 
@@ -499,6 +621,9 @@ impl AvatarVisualState {
         } else {
             self.idle_ticks += ticks;
             if self.pose == "normal"
+                && self.auto_poses_enabled
+                && self.manual_pose_override.is_none()
+                && !self.media_playing
                 && !self.dance_active
                 && self.idle_ticks >= IDLE_SLEEP_TICKS
                 && !sprites.get_slot("sleep").is_empty()
@@ -1626,5 +1751,70 @@ mod tests {
         // New rect must contain BGRA = [232, 213, 105, 255]
         let off = ((50 * w + 60) * 4) as usize;
         assert_eq!(&fb[off..off + 4], &[232, 213, 105, 255]);
+    }
+
+    #[test]
+    fn presence_snapshot_switches_perch_music_caption_and_game_mode() {
+        use crate::presence::{GameModeState, MediaPlaybackState, PresenceSnapshot};
+
+        let mut store = SpriteStore::new(
+            PathBuf::from("/nonexistent-bundled"),
+            Some(PathBuf::from("/nonexistent-user")),
+        );
+        let mut vis = AvatarVisualState::default();
+        let mut phys = AvatarPhysics2D::new(300.0, 420.0, 100.0, 100.0);
+
+        // 1. Music starts playing -> auto-switches to perch_music + track bubble
+        let playing = PresenceSnapshot {
+            media: MediaPlaybackState {
+                is_playing: true,
+                player: "spotify".to_string(),
+                artist: "sekairotten".to_string(),
+                title: "46с".to_string(),
+                track_label: "sekairotten — 46с".to_string(),
+            },
+            game_mode: GameModeState::default(),
+        };
+        assert!(vis.apply_presence_snapshot(playing.clone(), &mut store, &mut phys));
+        assert_eq!(vis.pose, "perch_music");
+        assert!(vis.caption_text.contains("sekairotten — 46с"));
+
+        // 2. Same track continues -> does not spam caption again
+        vis.caption_text.clear();
+        assert!(!vis.apply_presence_snapshot(playing, &mut store, &mut phys));
+        assert!(vis.caption_text.is_empty());
+
+        // 3. Fullscreen game starts -> enters Game Mode sleep; exits -> resumes perch_music
+        let in_game = PresenceSnapshot {
+            media: MediaPlaybackState {
+                is_playing: true,
+                track_label: "sekairotten — 46с".to_string(),
+                ..MediaPlaybackState::default()
+            },
+            game_mode: GameModeState {
+                active: true,
+                reason: "fullscreen_game",
+            },
+        };
+        assert!(vis.apply_presence_snapshot(in_game, &mut store, &mut phys));
+        assert!(vis.power_saver_active);
+        assert_eq!(vis.pose, "sleep");
+
+        let back_to_desktop = PresenceSnapshot {
+            media: MediaPlaybackState {
+                is_playing: true,
+                track_label: "sekairotten — 46с".to_string(),
+                ..MediaPlaybackState::default()
+            },
+            game_mode: GameModeState::default(),
+        };
+        assert!(vis.apply_presence_snapshot(back_to_desktop, &mut store, &mut phys));
+        assert!(!vis.power_saver_active);
+        assert_eq!(vis.pose, "perch_music");
+
+        // 4. Music pauses -> returns to normal pose
+        let paused = PresenceSnapshot::default();
+        assert!(vis.apply_presence_snapshot(paused, &mut store, &mut phys));
+        assert_eq!(vis.pose, "normal");
     }
 }

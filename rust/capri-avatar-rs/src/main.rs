@@ -6,6 +6,7 @@
 mod ipc;
 mod menu;
 mod physics;
+mod presence;
 mod protocol;
 mod renderer;
 mod sprites;
@@ -22,6 +23,7 @@ use ipc::{
 };
 use menu::{ContextMenu, MenuAction, MenuSnapshot};
 use physics::{query_window_shelves, AvatarPhysics2D, LandingSurface, MonitorWorkArea, PhysicsState};
+use presence::PresencePoller;
 use renderer::{AvatarRenderer, AvatarVisualState, LocomotionRequest, CANVAS_H, CANVAS_W};
 use sprites::{resolve_bundled_sprites_dir, SpriteStore};
 use wayland::{
@@ -278,6 +280,16 @@ fn main() {
     let mut force_redraw = false;
     let mut compositor_disconnected = false;
 
+    // Background Living Awareness poller (MPRIS music vibe + automatic fullscreen/game detection)
+    let presence_poller = if args.headless {
+        None
+    } else {
+        Some(PresencePoller::spawn(
+            vis.auto_poses_enabled,
+            vis.game_mode_enabled && vis.game_mode_override.is_none(),
+        ))
+    };
+
     // Render and commit first frame immediately at startup!
     {
         let pm = renderer.render(&vis, &physics, &mut sprites);
@@ -297,6 +309,20 @@ fn main() {
     }
 
     while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
+        if let Some(ref poller) = presence_poller {
+            poller.set_flags(
+                vis.auto_poses_enabled,
+                vis.game_mode_enabled && vis.game_mode_override.is_none(),
+            );
+            if let Some(snap) = poller.poll_latest() {
+                if vis.apply_presence_snapshot(snap, &mut sprites, &mut physics)
+                    && !hidden_for_workspace
+                {
+                    force_redraw = true;
+                }
+            }
+        }
+
         if let Some(ppid) = args.parent_pid {
             if last_parent_check.elapsed() >= Duration::from_millis(800) {
                 last_parent_check = Instant::now();
@@ -696,9 +722,17 @@ fn main() {
                             let now_sec = start_instant.elapsed().as_secs_f64();
                             let evs = physics.end_grab(shift, now_sec, monitor, &shelves);
                             if shift {
+                                vis.sync_auto_pose(&mut sprites, &physics);
                                 vis.show_ephemeral_caption("Якорь закреплён.", 150);
                             } else if evs.perched {
-                                vis.pose = "perch".to_string();
+                                vis.pose = if vis.auto_poses_enabled && vis.media_playing {
+                                    "perch_music"
+                                } else {
+                                    "perch"
+                                }
+                                .to_string();
+                            } else if evs.landed || !physics.is_animating() {
+                                vis.sync_auto_pose(&mut sprites, &physics);
                             }
                         }
                         if let Some(ref mut st) = stage {
@@ -837,7 +871,14 @@ fn main() {
                     vis.trigger_glitch(&mut sprites);
                 }
                 if evs.perched {
-                    vis.pose = "perch".to_string();
+                    vis.pose = if vis.auto_poses_enabled && vis.media_playing {
+                        "perch_music"
+                    } else {
+                        "perch"
+                    }
+                    .to_string();
+                } else if evs.landed {
+                    vis.sync_auto_pose(&mut sprites, &physics);
                 }
             }
             if whole_ticks > 0 {
@@ -926,6 +967,8 @@ fn handle_menu_action(
                 vis.dance_active = !vis.dance_active;
                 if vis.dance_active {
                     vis.pose = "normal".to_string();
+                } else {
+                    vis.sync_auto_pose(sprites, physics);
                 }
             } else {
                 vis.dance_active = false;
@@ -933,14 +976,17 @@ fn handle_menu_action(
                     && (vis.pose == "perch" || vis.pose == "perch_music"))
                     || vis.pose == pose;
                 if already_active {
+                    vis.manual_pose_override = None;
                     if vis.pose == "sleep" {
                         vis.wake_up(sprites);
                     }
                     vis.pose = "normal".to_string();
+                    vis.sync_auto_pose(sprites, physics);
                 } else {
                     if vis.pose == "sleep" && pose != "sleep" {
                         vis.wake_up(sprites);
                     }
+                    vis.manual_pose_override = Some(pose.clone());
                     vis.pose = pose;
                 }
             }
@@ -960,6 +1006,7 @@ fn handle_menu_action(
         }
         MenuAction::ToggleAutoPoses => {
             vis.auto_poses_enabled = !vis.auto_poses_enabled;
+            vis.sync_auto_pose(sprites, physics);
         }
         MenuAction::CycleFocusTimer => {
             if let Some(mins) = vis.cycle_focus_timer() {
